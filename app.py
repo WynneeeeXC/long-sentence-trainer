@@ -1,25 +1,10 @@
 # -*- coding: utf-8 -*-
-"""考研英语长难句训练营 · Flask 主应用
-路由一览：
-    GET  /                     分析页（单句 + 批量）
-    POST /api/analyze          单句 AI 分析（不落库）
-    POST /api/batch-analyze    批量分析（自动切句，最多 10 句）
-    POST /api/save             保存分析结果（查重）
-    GET  /list                 句子库（搜索 + 考点筛选）
-    GET  /detail/<id>          详情 + 笔记 + 同类推荐 + 删除
-    POST /api/sentence/<id>/note   保存笔记
-    POST /api/sentence/<id>/delete 删除句子
-    GET  /review               复习页（先自译 → 看答案 → 自评）
-    GET  /api/review/next      随机抽句
-    POST /api/review/submit    提交复习自评
-    GET  /stats                统计页
-    GET  /api/stats            统计数据
-    GET  /api/export.csv       导出标注数据（机器学习作业用）
-"""
+"""考研英语长难句训练营 · Flask 主应用"""
 import csv
 import io
 import os
 import re
+import random
 
 import markdown as md
 from flask import Flask, Response, jsonify, render_template, request
@@ -33,7 +18,6 @@ app = Flask(__name__)
 
 @app.template_filter("markdown")
 def _md(s):
-    """旧版记录的 analysis 是 Markdown 文本，用这个过滤器渲染。"""
     return md.markdown(s or "")
 
 
@@ -56,14 +40,14 @@ def api_analyze():
         return jsonify({"ok": False, "error": "句子不能为空"})
     if len(text) > 2000:
         return jsonify({"ok": False, "error": "句子过长（超过 2000 字符），请拆分后再分析"})
-    result = ai_service.analyze_sentence(text)
+    user_translation = (data.get("user_translation") or "").strip()
+    result = ai_service.analyze_sentence(text, user_translation)
     if "error" in result:
         return jsonify({"ok": False, "error": result["error"], "raw": result.get("raw", "")})
     return jsonify({"ok": True, "result": result})
 
 
 def _split_sentences(text):
-    """按换行切句；单段长文按句子结束符（. ! ? 。！？）切分。最多 10 句。"""
     lines = [l.strip() for l in re.split(r"[\r\n]+", text) if l.strip()]
     if len(lines) > 1:
         return lines[:10]
@@ -111,6 +95,8 @@ def api_save():
         seg_translation=data.get("seg_translation"),
         full_translation=data.get("full_translation"),
         tips=data.get("tips"),
+        user_translation=(data.get("user_translation") or "").strip() or None,
+        critique=data.get("critique"),
     )
     return jsonify({"ok": True, "id": sid, "duplicate": False})
 
@@ -123,11 +109,8 @@ def sentence_list():
     point = request.args.get("exam_point", "").strip()
     rows = db.list_sentences(q=q, point=point)
     return render_template(
-        "list.html",
-        rows=rows,
-        exam_points=config.EXAM_POINTS,
-        cur_point=point,
-        q=q,
+        "list.html", rows=rows, exam_points=config.EXAM_POINTS,
+        cur_point=point, q=q,
     )
 
 
@@ -137,7 +120,8 @@ def detail(sid):
     if not s:
         return render_template("404.html"), 404
     similar = db.similar_sentences(sid, s["points_list"])
-    return render_template("detail.html", s=s, similar=similar)
+    phrases = db.phrases_by_sentence(sid)
+    return render_template("detail.html", s=s, similar=similar, phrases=phrases)
 
 
 @app.post("/api/sentence/<int:sid>/note")
@@ -171,9 +155,7 @@ def api_review_next():
         return jsonify({"ok": False, "message": "句子库还是空的，先去分析几句吧"})
     full = db.get_sentence(s["id"])
     return jsonify({"ok": True, "sentence": {
-        "id": s["id"],
-        "stem": s["stem"],
-        "source": s["source"],
+        "id": s["id"], "stem": s["stem"], "source": s["source"],
         "review_count": s["review_count"],
         "full_translation": full["full_translation"],
         "points_list": full["points_list"],
@@ -192,7 +174,7 @@ def api_review_submit():
     return jsonify({"ok": True})
 
 
-# ---------------- 统计与导出 ----------------
+# ---------------- 统计 ----------------
 
 @app.route("/stats")
 def stats_page():
@@ -206,22 +188,88 @@ def api_stats():
 
 @app.get("/api/export.csv")
 def api_export():
-    """导出带考点标注的 CSV，可直接用于机器学习文本分类作业。"""
     rows = db.export_rows()
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["id", "stem", "source", "exam_points", "full_translation", "created_at"])
     for r in rows:
-        w.writerow([
-            r["id"], r["stem"], r["source"], r["exam_points"] or "",
-            r["full_translation"] or "", r["created_at"],
-        ])
-    # 加 BOM，Excel 打开不乱码
+        w.writerow([r["id"], r["stem"], r["source"], r["exam_points"] or "",
+                    r["full_translation"] or "", r["created_at"]])
     return Response(
         "\ufeff" + buf.getvalue(),
         mimetype="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=sentences_export.csv"},
     )
+
+
+# ---------------- 必背短语 ----------------
+
+@app.route("/phrases")
+def phrases_page():
+    rows = db.list_phrases()
+    return render_template("phrases.html", rows=rows)
+
+
+@app.post("/api/phrases")
+def api_add_phrase():
+    data = request.get_json(silent=True) or {}
+    phrase = (data.get("phrase") or "").strip()
+    if not phrase:
+        return jsonify({"ok": False, "error": "短语不能为空"})
+    pid = db.add_phrase(
+        phrase=phrase,
+        translation=(data.get("translation") or "").strip(),
+        context=(data.get("context") or "").strip(),
+        example=(data.get("example") or "").strip(),
+        sentence_id=data.get("sentence_id"),
+    )
+    return jsonify({"ok": True, "id": pid})
+
+
+@app.post("/api/phrases/<int:pid>/delete")
+def api_delete_phrase(pid):
+    db.delete_phrase(pid)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/phrases/<int:pid>/mastered")
+def api_phrase_mastered(pid):
+    data = request.get_json(silent=True) or {}
+    db.set_phrase_mastered(pid, bool(data.get("flag", False)))
+    return jsonify({"ok": True})
+
+
+# ---------------- 短语匹配出题 ----------------
+
+@app.route("/quiz")
+def quiz_page():
+    return render_template("quiz.html")
+
+
+@app.get("/api/quiz")
+def api_quiz():
+    n = request.args.get("n", default=5, type=int)
+    rows = db.quiz_phrases(n=min(n, 10))
+    if len(rows) < 2:
+        return jsonify({"ok": False, "message": "短语本里至少要有 2 个短语才能出题，先去收录几个吧"})
+    # 所有短语池用于生成干扰项
+    pool = db.list_phrases()
+    options_pool = [p for p in pool if p["translation"]]
+    questions = []
+    for p in rows:
+        # 3 个干扰中文翻译
+        distractors = [x["translation"] for x in options_pool if x["id"] != p["id"]]
+        random.shuffle(distractors)
+        options = distractors[:3] + [p["translation"]]
+        random.shuffle(options)
+        questions.append({
+            "id": p["id"],
+            "en": p["phrase"],
+            "answer": p["translation"],
+            "options": options,
+            "context": p["context"],
+        })
+    return jsonify({"ok": True, "questions": questions})
 
 
 if __name__ == "__main__":
