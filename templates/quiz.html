@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}出题 · 长难句训练营{% endblock %}
+{% block content %}
+<h1>短语匹配练习</h1>
+<p class="sub">选中文短语对应的正确英文表达——答完再看得分</p>
+
+<div class="card" id="quiz-start">
+  <p class="mut">从短语本随机抽 5 个短语，4 选 1。</p>
+  <button class="btn primary" onclick="startQuiz()">开始出题</button>
+  <span id="quiz-empty" style="display:none" class="mut">短语本还空着，先去 <a href="/">分析句子</a> 收录几个短语。</span>
+</div>
+
+<div id="quiz-body" style="display:none">
+  <div class="card">
+    <div class="mut" id="quiz-progress"></div>
+    <div class="block" id="quiz-q"></div>
+    <div id="quiz-opts" style="display:flex;flex-direction:column;gap:10px"></div>
+  </div>
+  <div id="quiz-result" class="card" style="display:none">
+    <h3>本轮结果</h3>
+    <div id="result-detail"></div>
+    <div style="margin-top:14px">
+      <button class="btn primary" onclick="startQuiz()">再来一轮</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let questions = [], idx = 0, score = 0, answered = [];
+function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+
+async function startQuiz(){
+  const d = await (await fetch('/api/quiz?n=5')).json();
+  if(!d.ok){
+    document.getElementById('quiz-empty').style.display = '';
+    return;
+  }
+  questions = d.questions; idx = 0; score = 0; answered = [];
+  document.getElementById('quiz-start').style.display = 'none';
+  document.getElementById('quiz-body').style.display = '';
+  document.getElementById('quiz-result').style.display = 'none';
+  showQ();
+}
+
+function showQ(){
+  const q = questions[idx];
+  document.getElementById('quiz-progress').textContent = '第 ' + (idx + 1) + ' / ' + questions.length + ' 题';
+  document.getElementById('quiz-q').innerHTML =
+    '<div class="block-title">哪个表达对应：<strong>' + esc(q.answer) + '</strong></div>';
+  const box = document.getElementById('quiz-opts');
+  box.innerHTML = '';
+  q.options.forEach(opt => {
+    const b = document.createElement('button');
+    b.className = 'rating-btn';
+    b.style.textAlign = 'left';
+    b.textContent = opt;
+    b.onclick = () => pick(opt, q, b);
+    box.appendChild(b);
+  });
+}
+
+function pick(opt, q, btn){
+  const ok = opt === q.answer;
+  if(ok) score++;
+  answered.push({ q, chosen: opt, ok });
+  document.querySelectorAll('#quiz-opts .rating-btn').forEach(b => {
+    b.disabled = true;
+    if(b.textContent === q.answer) b.classList.add('on');
+    else if(b === btn && !ok) b.style.opacity = .5;
+  });
+  setTimeout(() => {
+    idx++;
+    if(idx < questions.length) showQ();
+    else showResult();
+  }, 900);
+}
+
+function showResult(){
+  document.getElementById('quiz-q').parentElement.style.display = 'none';
+  document.getElementById('quiz-opts').innerHTML = '';
+  const r = document.getElementById('quiz-result');
+  r.style.display = '';
+  document.getElementById('result-detail').innerHTML =
+    '<div style="font-size:22px;font-weight:700;color:var(--p1)">' + score + ' / ' + questions.length + '</div>'
+    + answered.map(a =>
+      '<div class="block"><div>' + esc(a.q.en) + '</div>'
+      + '<div class="mut">你选：' + esc(a.chosen) + (a.ok ? ' ✓' : ' ✗ 正确：' + esc(a.q.answer)) + '</div></div>'
+    ).join('');
+}
+</script>
+{% endblock %}
