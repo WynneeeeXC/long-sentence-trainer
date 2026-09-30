@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}考研长难句训练营{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="/">长难句训练营</a>
+    <div class="nav-links">
+      <a href="/" class="{{ 'active' if request.path == '/' else '' }}">分析</a>
+      <a href="/list" class="{{ 'active' if request.path == '/list' else '' }}">句子库</a>
+      <a href="/review" class="{{ 'active' if request.path == '/review' else '' }}">复习</a>
+      <a href="/stats" class="{{ 'active' if request.path == '/stats' else '' }}">统计</a>
+    </div>
+  </div>
+</nav>
+<main class="wrap">
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

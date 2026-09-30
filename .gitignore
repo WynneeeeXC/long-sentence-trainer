@@ -1,0 +1,28 @@
+# 密钥与环境 —— 永远不要提交
+.env
+
+# 数据库（个人数据）
+*.db
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# 编辑器
+.idea/
+.vscode/
+
+# 旧版拼写错误的 .gitgnore（保留文件但不同步）
+.gitgnore
+
+# 临时检查脚本
+_inspect_db.py
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# PyCharm 模板文件（与项目无关）
+main.py

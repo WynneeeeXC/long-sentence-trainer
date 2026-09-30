@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}句子库 · 长难句训练营{% endblock %}
+{% block content %}
+<h1>句子库</h1>
+<p class="sub">共 {{ rows | length }} 句 · 点击卡片查看详情 · <a href="/api/export.csv">导出标注数据（CSV）</a></p>
+
+<div class="card">
+  <form method="get" class="row">
+    <div style="flex:2">
+      <input type="text" name="q" placeholder="搜索原句关键词…" value="{{ q }}">
+    </div>
+    <div>
+      <select name="exam_point" onchange="this.form.submit()">
+        <option value="">全部考点</option>
+        {% for p in exam_points %}
+        <option value="{{ p }}" {{ 'selected' if p == cur_point else '' }}>{{ p }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="flex:0 0 auto">
+      <button class="btn primary" type="submit">筛选</button>
+      {% if q or cur_point %}<a class="btn ghost" href="/list">重置</a>{% endif %}
+    </div>
+  </form>
+</div>
+
+{% for r in rows %}
+<a class="sentence-link" href="/detail/{{ r.id }}">
+  <div class="card">
+    <div class="sentence-stem">{{ r.stem }}</div>
+    <div style="margin-top:10px">
+      {% for p in r.points_list %}<span class="badge">{{ p }}</span>{% endfor %}
+      {% if not r.points_list %}<span class="mut">未标注考点</span>{% endif %}
+    </div>
+    <div class="mut" style="margin-top:8px">
+      {{ r.source or '未标注' }} · {{ r.created_at }} · 复习 {{ r.review_count }} 次
+      {% if r.review_count == 0 %}<span class="badge warn">待复习</span>{% endif %}
+    </div>
+  </div>
+</a>
+{% else %}
+<div class="empty">还没有句子，去 <a href="/">分析</a> 第一句吧</div>
+{% endfor %}
+{% endblock %}

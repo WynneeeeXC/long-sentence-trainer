@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}统计 · 长难句训练营{% endblock %}
+{% block content %}
+<h1>学习统计</h1>
+<p class="sub">看看你的薄弱考点，复习要有的放矢</p>
+
+<div class="stat-cards" id="stat-cards"></div>
+
+<div class="card">
+  <h3>考点分布（句子库）</h3>
+  <div id="by-point"></div>
+  <div class="empty" id="empty-point" style="display:none">还没有带考点的句子</div>
+</div>
+
+<div class="card">
+  <h3>复习表现</h3>
+  <div id="by-rating"></div>
+  <div class="empty" id="empty-rating" style="display:none">还没有复习记录，去 <a href="/review">复习</a> 一下</div>
+</div>
+
+<div class="card">
+  <h3>薄弱考点（复习中翻车最多的考点）</h3>
+  <div id="weak"></div>
+  <div class="empty" id="empty-weak" style="display:none">暂无数据，多复习几轮再来看看</div>
+</div>
+
+<script>
+async function loadStats(){
+  const d = await (await fetch('/api/stats')).json();
+  const cover = d.total_sentences ? Math.round(d.reviewed_sentences / d.total_sentences * 100) : 0;
+  document.getElementById('stat-cards').innerHTML =
+    '<div class="stat-card"><div class="num">' + d.total_sentences + '</div><div class="lbl">句子总数</div></div>'
+    + '<div class="stat-card"><div class="num">' + d.reviewed_sentences + '</div><div class="lbl">已复习句子</div></div>'
+    + '<div class="stat-card"><div class="num">' + d.total_reviews + '</div><div class="lbl">复习次数</div></div>'
+    + '<div class="stat-card"><div class="num">' + cover + '%</div><div class="lbl">复习覆盖率</div></div>';
+  renderBars('by-point', d.by_point, 'count', 'empty-point');
+  renderBars('by-rating', d.by_rating, 'count', 'empty-rating');
+  renderBars('weak', d.weak_points, 'misses', 'empty-weak');
+}
+
+function renderBars(elId, data, key, emptyId){
+  const el = document.getElementById(elId);
+  const empty = document.getElementById(emptyId);
+  if(!data || !data.length){ el.innerHTML = ''; empty.style.display = ''; return; }
+  empty.style.display = 'none';
+  const max = Math.max(...data.map(x => x[key]), 1);
+  el.innerHTML = data.map(x =>
+    '<div class="bar-row">'
+    + '<div class="bar-label">' + esc(x.point || x.rating) + '</div>'
+    + '<div class="bar-track"><span class="bar-fill" style="width:' + Math.max(x[key] / max * 100, 4) + '%"></span></div>'
+    + '<div class="bar-num">' + x[key] + '</div>'
+    + '</div>'
+  ).join('');
+}
+
+function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+loadStats();
+</script>
+{% endblock %}

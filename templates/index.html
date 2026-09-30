@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% block title %}分析 · 长难句训练营{% endblock %}
+{% block content %}
+<h1>分析长难句</h1>
+<p class="sub">粘贴句子 → AI 拆结构、标考点、给翻译 → 确认考点后保存进库</p>
+
+<div class="tabs">
+  <div class="tab on" data-tab="single">单句分析</div>
+  <div class="tab" data-tab="batch">批量导入</div>
+</div>
+
+<!-- ========== 单句模式 ========== -->
+<div class="step active" id="step-single">
+  <div class="card">
+    <label for="sentence">英文句子</label>
+    <textarea id="sentence" placeholder="把阅读里读不懂的长难句粘贴到这里…"></textarea>
+    <div class="row">
+      <div>
+        <label for="source">来源</label>
+        <select id="source">
+          {% for s in sources %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        </select>
+      </div>
+      <div style="flex:0 0 auto">
+        <button class="btn primary" id="btn-analyze" onclick="analyzeOne()">开始分析</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="result-wrap" style="display:none">
+    <div class="card">
+      <h3>分析结果</h3>
+      <div class="block">
+        <div class="block-title">句子结构</div>
+        <div id="r-structure"></div>
+      </div>
+      <div class="block">
+        <div class="block-title">考点（点击可增删）</div>
+        <div id="r-points"></div>
+      </div>
+      <div class="block">
+        <div class="block-title">逐段翻译</div>
+        <table class="seg" id="r-seg"></table>
+      </div>
+      <div class="trans" id="r-full"></div>
+      <div class="tips" id="r-tips" style="margin-top:12px"></div>
+      <div style="margin-top:16px;text-align:right">
+        <button class="btn primary" onclick="saveOne()">保存到句子库</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 批量模式 ========== -->
+<div class="step" id="step-batch">
+  <div class="card">
+    <label for="batchText">批量句子（每行一句；或粘贴整段，自动按句号切分，最多 10 句）</label>
+    <textarea id="batchText" placeholder="On the side of a bottle of water, you'll often find a list of ingredients...&#10;&#10;每行放一句也可以"></textarea>
+    <div class="row">
+      <div>
+        <label for="batchSource">来源</label>
+        <select id="batchSource">
+          {% for s in sources %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        </select>
+      </div>
+      <div style="flex:0 0 auto">
+        <button class="btn primary" id="btn-batch" onclick="analyzeBatch()">批量分析</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="batch-result" style="display:none">
+    <div class="card">
+      <h3>批量结果 <span class="mut" id="batch-meta"></span></h3>
+      <div id="batch-list"></div>
+      <div style="margin-top:16px;text-align:right">
+        <button class="btn primary" onclick="saveBatch()">全部保存（自动跳过重复）</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="notice" id="notice"></div>
+
+<script>
+const EXAM_POINTS = {{ exam_points | tojson }};
+let state = { text: '', result: null, batch: [] };
+
+function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function notice(msg){
+  const n = document.getElementById('notice');
+  n.textContent = msg; n.classList.add('show');
+  clearTimeout(notice._t);
+  notice._t = setTimeout(() => n.classList.remove('show'), 2600);
+}
+async function post(url, body){
+  const res = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  return res.json();
+}
+function setBtnLoading(btn, loading, text){
+  btn.disabled = loading;
+  btn.innerHTML = loading ? '<span class="spinner"></span> ' + text : text;
+}
+
+/* 标签切换 */
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+    t.classList.add('on');
+    document.querySelectorAll('.step').forEach(x => x.classList.remove('active'));
+    document.getElementById('step-' + t.dataset.tab).classList.add('active');
+  });
+});
+
+/* ---------- 单句分析 ---------- */
+async function analyzeOne(){
+  const text = document.getElementById('sentence').value.trim();
+  if(!text){ notice('请先粘贴句子'); return; }
+  const btn = document.getElementById('btn-analyze');
+  setBtnLoading(btn, true, 'AI 分析中…');
+  const data = await post('/api/analyze', { text, source: document.getElementById('source').value });
+  setBtnLoading(btn, false, '开始分析');
+  if(!data.ok){ notice('分析失败：' + data.error); return; }
+  state.text = text;
+  state.result = data.result;
+  renderResult(data.result);
+}
+
+function renderResult(r){
+  const st = r.structure || {};
+  let html = '';
+  if(st.main) html += '<div class="sentence-stem">' + esc(st.main) + '</div>';
+  (st.clauses || []).forEach((c, i) => {
+    html += '<div class="clause">'
+      + '<span class="ct' + (i % 2 ? ' alt' : '') + '">' + esc(c.type || '从句') + '</span>'
+      + '<div><div>' + esc(c.text || '') + '</div>'
+      + (c.modifies ? '<div class="mut">' + esc(c.modifies) + '</div>' : '')
+      + '</div></div>';
+  });
+  if(st.non_finite) html += '<div class="mut" style="margin-top:8px">非谓语：' + esc(st.non_finite) + '</div>';
+  document.getElementById('r-structure').innerHTML = html || '<span class="mut">未解析出结构</span>';
+
+  const ptsBox = document.getElementById('r-points');
+  ptsBox.innerHTML = '';
+  EXAM_POINTS.forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'chip' + ((r.exam_points || []).includes(p) ? ' on' : '');
+    b.type = 'button';
+    b.textContent = p;
+    b.onclick = () => b.classList.toggle('on');
+    ptsBox.appendChild(b);
+  });
+
+  const seg = document.getElementById('r-seg');
+  seg.innerHTML = '';
+  (r.seg_translation || []).forEach(s => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + esc(s.en || '') + '</td><td>' + esc(s.zh || '') + '</td>';
+    seg.appendChild(tr);
+  });
+  if(!(r.seg_translation || []).length) seg.innerHTML = '<tr><td colspan="2" class="mut">无</td></tr>';
+
+  document.getElementById('r-full').innerHTML = '<strong>整句翻译：</strong>' + esc(r.full_translation || '');
+  document.getElementById('r-tips').innerHTML = '<strong>翻译技巧：</strong>' + esc(r.tips || '');
+  const wrap = document.getElementById('result-wrap');
+  wrap.style.display = '';
+  wrap.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function saveOne(){
+  const r = state.result;
+  if(!r) return;
+  const points = [...document.querySelectorAll('#r-points .chip.on')].map(x => x.textContent);
+  const data = await post('/api/save', {
+    text: state.text,
+    source: document.getElementById('source').value,
+    structure: r.structure,
+    exam_points: points,
+    seg_translation: r.seg_translation,
+    full_translation: r.full_translation,
+    tips: r.tips
+  });
+  if(!data.ok){ notice('保存失败：' + (data.error || '未知错误')); return; }
+  notice(data.duplicate ? '该句子已存在（#' + data.id + '），未重复保存' : '已保存 #' + data.id);
+  state.text = ''; state.result = null;
+  document.getElementById('sentence').value = '';
+  document.getElementById('result-wrap').style.display = 'none';
+}
+
+/* ---------- 批量分析 ---------- */
+async function analyzeBatch(){
+  const text = document.getElementById('batchText').value.trim();
+  if(!text){ notice('请先输入句子'); return; }
+  const btn = document.getElementById('btn-batch');
+  setBtnLoading(btn, true, '批量分析中…');
+  const data = await post('/api/batch-analyze', { text, source: document.getElementById('batchSource').value });
+  setBtnLoading(btn, false, '批量分析');
+  if(!data.ok){ notice('失败：' + data.error); return; }
+  state.batch = data.results;
+  renderBatch(data.results);
+}
+
+function renderBatch(results){
+  const ok = results.filter(r => r.ok).length;
+  const fail = results.length - ok;
+  document.getElementById('batch-meta').textContent = '共 ' + results.length + ' 句 · 成功 ' + ok + ' 句' + (fail ? ' · 失败 ' + fail + ' 句' : '');
+  const list = document.getElementById('batch-list');
+  list.innerHTML = '';
+  results.forEach((r, i) => {
+    const div = document.createElement('div');
+    div.className = 'block';
+    let inner = '<div class="sentence-stem">' + (i + 1) + '. ' + esc(r.text) + '</div>';
+    if(r.ok){
+      const pts = (r.result.exam_points || []).map(p => '<span class="badge">' + esc(p) + '</span>').join('');
+      inner += '<div style="margin-top:8px">' + pts
+        + (r.duplicate ? '<span class="badge warn">已存在 #' + r.dup_id + '</span>' : '<span class="badge ok">待保存</span>')
+        + '</div>';
+    } else {
+      inner += '<div style="margin-top:8px"><span class="badge bad">失败：' + esc(r.error) + '</span></div>';
+    }
+    div.innerHTML = inner;
+    list.appendChild(div);
+  });
+  const wrap = document.getElementById('batch-result');
+  wrap.style.display = '';
+  wrap.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function saveBatch(){
+  let saved = 0, dup = 0, failed = 0;
+  for(const r of state.batch){
+    if(!r.ok){ failed++; continue; }
+    const d = await post('/api/save', {
+      text: r.text,
+      source: document.getElementById('batchSource').value,
+      structure: r.result.structure,
+      exam_points: r.result.exam_points,
+      seg_translation: r.result.seg_translation,
+      full_translation: r.result.full_translation,
+      tips: r.result.tips
+    });
+    if(d.ok) d.duplicate ? dup++ : saved++;
+    else failed++;
+  }
+  notice('保存完成：新增 ' + saved + ' 句，跳过重复 ' + dup + ' 句，失败 ' + failed + ' 句');
+  document.getElementById('batch-result').style.display = 'none';
+  document.getElementById('batchText').value = '';
+  state.batch = [];
+}
+</script>
+{% endblock %}

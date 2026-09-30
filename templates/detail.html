@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}句子详情 · 长难句训练营{% endblock %}
+{% block content %}
+<a href="/list" class="btn ghost" style="margin-bottom:14px">← 返回句子库</a>
+<h1>句子详情</h1>
+
+<div class="card">
+  <div class="sentence-stem" style="font-size:18px">{{ s.stem }}</div>
+  <div class="mut" style="margin-top:10px">
+    {{ s.source or '未标注' }} · {{ s.created_at }} · 已复习 {{ s.review_count }} 次
+  </div>
+  <div style="margin-top:10px">
+    {% for p in s.points_list %}<span class="badge">{{ p }}</span>{% else %}<span class="mut">未标注考点</span>{% endfor %}
+  </div>
+</div>
+
+{% if s.structure_obj %}
+<div class="card">
+  <h3>句子结构</h3>
+  {% if s.structure_obj.main %}
+  <div class="block"><div class="block-title">主句</div><div>{{ s.structure_obj.main }}</div></div>
+  {% endif %}
+  {% for c in s.structure_obj.clauses %}
+  <div class="block">
+    <div class="block-title">{{ c.type or '从句' }}</div>
+    <div>{{ c.text or '' }}</div>
+    {% if c.modifies %}<div class="mut" style="margin-top:6px">{{ c.modifies }}</div>{% endif %}
+  </div>
+  {% endfor %}
+  {% if s.structure_obj.non_finite %}
+  <div class="block"><div class="block-title">非谓语</div><div>{{ s.structure_obj.non_finite }}</div></div>
+  {% endif %}
+</div>
+{% elif s.analysis %}
+<div class="card">
+  <h3>AI 分析（旧版记录）</h3>
+  <div>{{ s.analysis | markdown | safe }}</div>
+</div>
+{% endif %}
+
+{% if s.seg_list %}
+<div class="card">
+  <h3>逐段翻译</h3>
+  <table class="seg">
+    {% for seg in s.seg_list %}
+    <tr><td>{{ seg.en or '' }}</td><td>{{ seg.zh or '' }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{% if s.full_translation %}
+<div class="card">
+  <h3>整句翻译</h3>
+  <div class="trans">{{ s.full_translation }}</div>
+</div>
+{% endif %}
+
+{% if s.tips %}
+<div class="card">
+  <h3>翻译技巧</h3>
+  <div class="tips">{{ s.tips }}</div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>我的笔记</h3>
+  <textarea id="note" placeholder="记下你的理解、错因、下次复习重点…">{{ s.note or '' }}</textarea>
+  <div style="margin-top:10px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
+    <button class="btn primary" onclick="saveNote({{ s.id }})">保存笔记</button>
+    <button class="btn danger" onclick="delSentence({{ s.id }})">删除该句子</button>
+  </div>
+</div>
+
+{% if similar %}
+<div class="card">
+  <h3>同类考点推荐</h3>
+  <p class="mut">这些句子和本句有共同考点，值得一起复习：</p>
+  {% for s2 in similar %}
+  <a class="sentence-link" href="/detail/{{ s2.id }}">
+    <div class="block">
+      <div class="sentence-stem">{{ s2.stem }}</div>
+      <div class="mut" style="margin-top:6px">
+        {% for p in s2.points_list %}<span class="badge">{{ p }}</span>{% endfor %}
+        {{ s2.created_at }}
+      </div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<script>
+async function saveNote(id){
+  const note = document.getElementById('note').value;
+  const res = await fetch('/api/sentence/' + id + '/note', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ note })
+  });
+  const d = await res.json();
+  alert(d.ok ? '笔记已保存' : '保存失败');
+}
+async function delSentence(id){
+  if(!confirm('确定删除这个句子及其复习记录吗？')) return;
+  const res = await fetch('/api/sentence/' + id + '/delete', { method: 'POST' });
+  const d = await res.json();
+  if(d.ok) location.href = '/list';
+  else alert('删除失败');
+}
+</script>
+{% endblock %}

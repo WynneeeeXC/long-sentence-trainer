@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}复习 · 长难句训练营{% endblock %}
+{% block content %}
+<h1>复习模式</h1>
+<p class="sub" id="progress">先自己翻译，再看答案对比，最后标记表现</p>
+
+<div class="card" id="step1">
+  <div class="block">
+    <div class="block-title">英文原句</div>
+    <div class="sentence-stem" id="rv-stem" style="font-size:18px"></div>
+    <div class="mut" id="rv-meta" style="margin-top:8px"></div>
+  </div>
+  <label for="myTrans">我的翻译</label>
+  <textarea id="myTrans" placeholder="先别急着看答案，自己试着翻译一遍…"></textarea>
+  <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+    <button class="btn primary" onclick="checkAnswer()">我翻译完了，看答案</button>
+    <button class="btn ghost" onclick="nextSentence()">换一句</button>
+  </div>
+</div>
+
+<div class="card" id="step2" style="display:none">
+  <div class="block">
+    <div class="block-title">我的翻译</div>
+    <div id="rv-mine"></div>
+  </div>
+  <div class="block">
+    <div class="block-title">AI 整句翻译</div>
+    <div class="trans" id="rv-ai"></div>
+  </div>
+  <div class="block">
+    <div class="block-title">考点参考</div>
+    <div id="rv-points"></div>
+  </div>
+  <label>这次翻译得怎么样？（标记后自动记录到统计）</label>
+  <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
+    <button type="button" class="rating-btn" data-r="完全不会" onclick="rate(this)">完全不会</button>
+    <button type="button" class="rating-btn" data-r="意思对但表达差" onclick="rate(this)">意思对但表达差</button>
+    <button type="button" class="rating-btn" data-r="翻译准确" onclick="rate(this)">翻译准确</button>
+  </div>
+  <div style="margin-top:14px;text-align:right">
+    <button class="btn primary" id="btn-next" onclick="submitAndNext()" disabled>下一句 →</button>
+  </div>
+</div>
+
+<div class="empty" id="rv-empty" style="display:none">句子库是空的，先去 <a href="/">分析</a> 几句吧</div>
+
+<script>
+let current = null, chosenRating = null;
+
+function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+async function post(url, body){
+  const res = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  return res.json();
+}
+
+async function nextSentence(){
+  chosenRating = null;
+  document.querySelectorAll('.rating-btn').forEach(b => b.classList.remove('on'));
+  document.getElementById('btn-next').disabled = true;
+  const res = await fetch('/api/review/next');
+  const d = await res.json();
+  if(!d.ok){
+    document.getElementById('rv-empty').style.display = '';
+    document.getElementById('step1').style.display = 'none';
+    document.getElementById('step2').style.display = 'none';
+    return;
+  }
+  current = d.sentence;
+  document.getElementById('rv-stem').textContent = current.stem;
+  document.getElementById('rv-meta').textContent =
+    (current.source || '未标注') + ' · 库内共 ' + current.total + ' 句 · 尚未复习 ' + current.remaining + ' 句';
+  document.getElementById('myTrans').value = '';
+  document.getElementById('step1').style.display = '';
+  document.getElementById('step2').style.display = 'none';
+  document.getElementById('rv-empty').style.display = 'none';
+  document.getElementById('progress').textContent = '先自己翻译，再看答案对比';
+  document.getElementById('myTrans').focus();
+}
+
+async function checkAnswer(){
+  const my = document.getElementById('myTrans').value.trim();
+  if(!my){ alert('先写下你的翻译再对比，这样才练得到'); return; }
+  document.getElementById('rv-mine').textContent = my;
+  document.getElementById('rv-ai').textContent = current.full_translation || '（该句子暂无 AI 整句翻译）';
+  document.getElementById('rv-points').innerHTML =
+    (current.points_list || []).map(p => '<span class="badge">' + esc(p) + '</span>').join('')
+    || '<span class="mut">未标注考点</span>';
+  document.getElementById('step1').style.display = 'none';
+  document.getElementById('step2').style.display = '';
+  document.getElementById('progress').textContent = '对比完成，标记一下这次的表现';
+}
+
+function rate(btn){
+  chosenRating = btn.dataset.r;
+  document.querySelectorAll('.rating-btn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  document.getElementById('btn-next').disabled = false;
+}
+
+async function submitAndNext(){
+  if(!chosenRating){ alert('请先标记这次翻译的表现'); return; }
+  await post('/api/review/submit', {
+    sentence_id: current.id,
+    user_translation: document.getElementById('rv-mine').textContent,
+    self_rating: chosenRating
+  });
+  nextSentence();
+}
+
+nextSentence();
+</script>
+{% endblock %}
