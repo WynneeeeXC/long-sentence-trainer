@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}短语本 · 长难句训练营{% endblock %}
+{% block content %}
+<h1>必背短语本</h1>
+<p class="sub">读句子时攒下的固定表达，去 <a href="/quiz">出题</a> 做匹配练习</p>
+
+<div class="card">
+  <h3>手动收录</h3>
+  <div class="row">
+    <div><input type="text" id="new-p" placeholder="短语/搭配，如 be bound to"></div>
+    <div><input type="text" id="new-z" placeholder="中文，如 注定/一定会"></div>
+  </div>
+  <div style="margin-top:10px;text-align:right">
+    <button class="btn primary" onclick="addPhrase()">收录</button>
+  </div>
+</div>
+
+{% for r in rows %}
+<div class="card" style="{{ 'opacity:.6' if r.mastered else '' }}">
+  <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+    <div style="flex:1;min-width:220px">
+      <div style="font-weight:700;font-size:16px">{{ r.phrase }}
+        {% if r.mastered %}<span class="badge">已掌握</span>{% endif %}
+      </div>
+      <div style="margin-top:4px">{{ r.translation or '' }}</div>
+      {% if r.context %}<div class="mut" style="margin-top:6px">来自：{{ r.context }}</div>{% endif %}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn soft" onclick="toggleMastered({{ r.id }}, {{ 1 if r.mastered else 0 }})">{{ '标回待复习' if r.mastered else '标为已掌握' }}</button>
+      <button class="btn danger" onclick="delPhrase({{ r.id }})">删除</button>
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="empty">短语本还空着——去分析句子，AI 会自动挑出值得背的表达，点「收录」即可</div>
+{% endfor %}
+
+<div class="notice" id="notice"></div>
+<script>
+function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function notice(msg){
+  const n = document.getElementById('notice');
+  n.textContent = msg; n.classList.add('show');
+  clearTimeout(notice._t);
+  notice._t = setTimeout(() => n.classList.remove('show'), 2200);
+}
+async function post(url, body){
+  const res = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {}) });
+  return res.json();
+}
+async function addPhrase(){
+  const phrase = document.getElementById('new-p').value.trim();
+  const translation = document.getElementById('new-z').value.trim();
+  if(!phrase){ notice('短语不能为空'); return; }
+  await post('/api/phrases', { phrase, translation });
+  location.reload();
+}
+async function delPhrase(id){
+  if(!confirm('删除这个短语？')) return;
+  await post('/api/phrases/' + id + '/delete', {});
+  location.reload();
+}
+async function toggleMastered(id, flag){
+  await post('/api/phrases/' + id + '/mastered', { flag: flag === 1 ? false : true });
+  location.reload();
+}
+</script>
+{% endblock %}
