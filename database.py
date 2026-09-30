@@ -55,7 +55,9 @@ def init_db():
         "tips":             "TEXT",
         "note":             "TEXT DEFAULT ''",
         "difficulty":       "INTEGER DEFAULT 3",
-        "updated_at":       "TIMESTAMP DEFAULT (datetime('now','localtime'))",
+        # 注意：ALTER TABLE ADD COLUMN 不允许函数默认值（datetime('now') 会报错），
+        # 老库补列时只能给普通类型；updated_at 老行为 NULL，不影响功能
+        "updated_at":       "TIMESTAMP",
     }.items():
         if col not in existing:
             c.execute(f"ALTER TABLE sentences ADD COLUMN {col} {ddl}")
