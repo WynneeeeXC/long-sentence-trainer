@@ -2,7 +2,7 @@
 {% block title %}分析 · 长难句训练营{% endblock %}
 {% block content %}
 <h1>分析长难句</h1>
-<p class="sub">粘贴句子 → AI 拆结构、标考点、给翻译 → 确认考点后保存进库</p>
+<p class="sub">粘贴句子 → 先自己译 → AI 拆结构/标考点/点评译文/挑出必背短语 → 确认后保存</p>
 
 <div class="tabs">
   <div class="tab on" data-tab="single">单句分析</div>
@@ -14,6 +14,8 @@
   <div class="card">
     <label for="sentence">英文句子</label>
     <textarea id="sentence" placeholder="把阅读里读不懂的长难句粘贴到这里…"></textarea>
+    <label for="myTransInput">我的翻译（可选——先自己译，AI 会一针见血点评）</label>
+    <textarea id="myTransInput" style="min-height:70px" placeholder="试着自己翻一遍，写得再烂也没关系，点评才有靶子…"></textarea>
     <div class="row">
       <div>
         <label for="source">来源</label>
@@ -28,8 +30,28 @@
   </div>
 
   <div id="result-wrap" style="display:none">
+    <!-- AI 点评 -->
+    <div class="card" id="critique-wrap" style="display:none">
+      <h3>AI 对你译文的点评</h3>
+      <div class="block">
+        <div class="block-title">总评</div>
+        <div id="c-verdict"></div>
+      </div>
+      <div class="block">
+        <div class="block-title">问题点</div>
+        <div id="c-problems"></div>
+      </div>
+      <div class="trans" id="c-better"></div>
+    </div>
+
+    <!-- 必背短语建议 -->
+    <div class="card" id="phrases-wrap" style="display:none">
+      <h3>值得背的表达 <span class="mut">点「收录」放进短语本</span></h3>
+      <div id="p-suggestions"></div>
+    </div>
+
     <div class="card">
-      <h3>分析结果</h3>
+      <h3>结构与翻译</h3>
       <div class="block">
         <div class="block-title">句子结构</div>
         <div id="r-structure"></div>
@@ -102,7 +124,6 @@ function setBtnLoading(btn, loading, text){
   btn.innerHTML = loading ? '<span class="spinner"></span> ' + text : text;
 }
 
-/* 标签切换 */
 document.querySelectorAll('.tab').forEach(t => {
   t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
@@ -118,7 +139,10 @@ async function analyzeOne(){
   if(!text){ notice('请先粘贴句子'); return; }
   const btn = document.getElementById('btn-analyze');
   setBtnLoading(btn, true, 'AI 分析中…');
-  const data = await post('/api/analyze', { text, source: document.getElementById('source').value });
+  const data = await post('/api/analyze', {
+    text,
+    user_translation: document.getElementById('myTransInput').value.trim()
+  });
   setBtnLoading(btn, false, '开始分析');
   if(!data.ok){ notice('分析失败：' + data.error); return; }
   state.text = text;
@@ -127,6 +151,36 @@ async function analyzeOne(){
 }
 
 function renderResult(r){
+  // 点评
+  const cw = document.getElementById('critique-wrap');
+  if(r.critique && (r.critique.verdict || (r.critique.problems||[]).length)){
+    cw.style.display = '';
+    document.getElementById('c-verdict').textContent = r.critique.verdict || '';
+    const probs = r.critique.problems || [];
+    document.getElementById('c-problems').innerHTML = probs.length
+      ? '<ul style="margin:0;padding-left:18px">' + probs.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>'
+      : '<span class="mut">没有明显问题</span>';
+    document.getElementById('c-better').innerHTML = r.critique.better ? '<strong>更地道：</strong>' + esc(r.critique.better) : '';
+  } else { cw.style.display = 'none'; }
+
+  // 短语建议
+  const pw = document.getElementById('phrases-wrap');
+  const ps = r.phrases || [];
+  if(ps.length){
+    pw.style.display = '';
+    document.getElementById('p-suggestions').innerHTML = ps.map((p, i) =>
+      '<div class="block">'
+      + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">'
+      + '<div style="flex:1;min-width:200px"><div style="font-weight:700">' + esc(p.en) + '</div>'
+      + '<div>' + esc(p.zh || '') + '</div>'
+      + (p.tip ? '<div class="mut" style="margin-top:4px">' + esc(p.tip) + '</div>' : '')
+      + '</div>'
+      + '<button class="btn soft" data-i="' + i + '" onclick="collectPhrase(this)">收录</button>'
+      + '</div></div>'
+    ).join('');
+  } else { pw.style.display = 'none'; }
+
+  // 结构
   const st = r.structure || {};
   let html = '';
   if(st.main) html += '<div class="sentence-stem">' + esc(st.main) + '</div>';
@@ -167,6 +221,20 @@ function renderResult(r){
   wrap.scrollIntoView({ behavior: 'smooth' });
 }
 
+async function collectPhrase(btn){
+  const i = Number(btn.dataset.i);
+  const p = (state.result.phrases || [])[i];
+  if(!p) return;
+  const d = await post('/api/phrases', {
+    phrase: p.en, translation: p.zh || '', context: state.text
+  });
+  if(d.ok){
+    btn.textContent = '已收录 ✓';
+    btn.disabled = true;
+    notice('已收录进短语本');
+  } else notice('收录失败：' + (d.error || ''));
+}
+
 async function saveOne(){
   const r = state.result;
   if(!r) return;
@@ -178,12 +246,15 @@ async function saveOne(){
     exam_points: points,
     seg_translation: r.seg_translation,
     full_translation: r.full_translation,
-    tips: r.tips
+    tips: r.tips,
+    user_translation: document.getElementById('myTransInput').value.trim(),
+    critique: r.critique
   });
   if(!data.ok){ notice('保存失败：' + (data.error || '未知错误')); return; }
   notice(data.duplicate ? '该句子已存在（#' + data.id + '），未重复保存' : '已保存 #' + data.id);
   state.text = ''; state.result = null;
   document.getElementById('sentence').value = '';
+  document.getElementById('myTransInput').value = '';
   document.getElementById('result-wrap').style.display = 'none';
 }
 
