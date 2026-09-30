@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""SQLite 数据层：句子 + 复习记录，兼容你旧版库的平滑迁移。"""
+"""SQLite 数据层：句子 + 复习记录 + 必背短语，兼容旧版库的平滑迁移。"""
 import json
 import sqlite3
 
@@ -14,7 +14,7 @@ def get_conn():
 
 
 def init_db():
-    """建表 + 旧库补列迁移（老记录只迁移 schema，数据原样保留）。"""
+    """建表 + 旧库补列迁移 + 旧考点名迁移。"""
     conn = get_conn()
     c = conn.cursor()
     c.execute("""
@@ -31,7 +31,7 @@ def init_db():
             note            TEXT DEFAULT '',
             difficulty      INTEGER DEFAULT 3,
             created_at      TIMESTAMP DEFAULT (datetime('now','localtime')),
-            updated_at      TIMESTAMP DEFAULT (datetime('now','localtime'))
+            updated_at      TIMESTAMP
         )
     """)
     c.execute("""
@@ -43,7 +43,19 @@ def init_db():
             reviewed_at     TIMESTAMP DEFAULT (datetime('now','localtime'))
         )
     """)
-    # 迁移：旧版表可能缺少这些列，逐列补齐
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS phrases (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            sentence_id INTEGER REFERENCES sentences(id) ON DELETE SET NULL,
+            phrase      TEXT NOT NULL,
+            translation TEXT,
+            context     TEXT,
+            example     TEXT,
+            mastered    INTEGER DEFAULT 0,
+            created_at  TIMESTAMP DEFAULT (datetime('now','localtime'))
+        )
+    """)
+    # 补列：旧库逐列补齐
     existing = {r[1] for r in c.execute("PRAGMA table_info(sentences)").fetchall()}
     for col, ddl in {
         "source":           "TEXT DEFAULT '手动输入'",
@@ -55,29 +67,44 @@ def init_db():
         "tips":             "TEXT",
         "note":             "TEXT DEFAULT ''",
         "difficulty":       "INTEGER DEFAULT 3",
-        # 注意：ALTER TABLE ADD COLUMN 不允许函数默认值（datetime('now') 会报错），
-        # 老库补列时只能给普通类型；updated_at 老行为 NULL，不影响功能
-        "updated_at":       "TIMESTAMP",
+        "user_translation": "TEXT",
+        "critique":         "TEXT",
     }.items():
         if col not in existing:
             c.execute(f"ALTER TABLE sentences ADD COLUMN {col} {ddl}")
+
+    # 旧考点名迁移：倒装 -> 倒装句 等；旧版"非谓语"无法区分子类，保留原值
+    rows = c.execute("SELECT id, exam_points FROM sentences WHERE exam_points IS NOT NULL").fetchall()
+    for sid, pts_json in rows:
+        try:
+            pts = json.loads(pts_json)
+        except Exception:
+            continue
+        new_pts = []
+        for p in pts:
+            mapped = config.LEGACY_POINT_MAP.get(p, p)
+            new_pts.append(mapped if mapped else p)
+        if new_pts != pts:
+            c.execute("UPDATE sentences SET exam_points = ? WHERE id = ?",
+                      (json.dumps(new_pts, ensure_ascii=False), sid))
     conn.commit()
     conn.close()
 
 
 def _j(obj):
-    """把结构体序列化成 JSON 字符串存库，空则 None。"""
     return json.dumps(obj, ensure_ascii=False) if obj else None
 
 
 def insert_sentence(stem, source, structure=None, exam_points=None,
-                    seg_translation=None, full_translation=None, tips=None):
+                    seg_translation=None, full_translation=None, tips=None,
+                    user_translation=None, critique=None):
     conn = get_conn()
     cur = conn.execute(
         "INSERT INTO sentences (stem, source, structure, exam_points, "
-        "seg_translation, full_translation, tips) VALUES (?,?,?,?,?,?,?)",
+        "seg_translation, full_translation, tips, user_translation, critique) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
         (stem, source, _j(structure), _j(exam_points), _j(seg_translation),
-         full_translation, tips),
+         full_translation, tips, user_translation, _j(critique)),
     )
     conn.commit()
     conn.close()
@@ -85,7 +112,6 @@ def insert_sentence(stem, source, structure=None, exam_points=None,
 
 
 def find_by_stem(stem):
-    """查重：同句原文只存一条。"""
     conn = get_conn()
     r = conn.execute("SELECT id FROM sentences WHERE stem = ? LIMIT 1", (stem,)).fetchone()
     conn.close()
@@ -93,7 +119,6 @@ def find_by_stem(stem):
 
 
 def get_sentence(sid):
-    """详情：附带复习次数，并把 JSON 字段解析成 Python 对象。"""
     conn = get_conn()
     r = conn.execute(
         """SELECT s.*, (SELECT COUNT(*) FROM reviews r WHERE r.sentence_id = s.id) AS review_count
@@ -107,11 +132,11 @@ def get_sentence(sid):
     d["points_list"] = json.loads(d["exam_points"]) if d["exam_points"] else []
     d["structure_obj"] = json.loads(d["structure"]) if d["structure"] else None
     d["seg_list"] = json.loads(d["seg_translation"]) if d["seg_translation"] else []
+    d["critique_obj"] = json.loads(d["critique"]) if d["critique"] else None
     return d
 
 
 def list_sentences(q="", point=""):
-    """列表：支持关键词搜索 + 考点筛选，按时间倒序。"""
     conn = get_conn()
     sql = """SELECT s.id, s.stem, s.source, s.exam_points, s.created_at,
                     (SELECT COUNT(*) FROM reviews r WHERE r.sentence_id = s.id) AS review_count
@@ -121,7 +146,6 @@ def list_sentences(q="", point=""):
         sql += " AND s.stem LIKE ?"
         args.append(f"%{q}%")
     if point:
-        # exam_points 存的是 JSON 数组，按 `"考点名"` 精确匹配
         sql += " AND s.exam_points LIKE ?"
         args.append(f'%"{point}"%')
     sql += " ORDER BY s.id DESC"
@@ -133,7 +157,6 @@ def list_sentences(q="", point=""):
 
 
 def similar_sentences(sid, points, limit=5):
-    """同类考点推荐：和本句有共同考点的其他句子。"""
     if not points:
         return []
     conn = get_conn()
@@ -172,7 +195,6 @@ def update_note(sid, note):
 
 
 def delete_sentence(sid):
-    """删除句子（复习记录由外键级联删除）。"""
     conn = get_conn()
     conn.execute("DELETE FROM sentences WHERE id = ?", (sid,))
     conn.commit()
@@ -191,7 +213,6 @@ def insert_review(sid, user_translation, self_rating):
 
 
 def next_review_sentence():
-    """复习抽句：优先抽复习次数最少的句子（随机打散）。"""
     conn = get_conn()
     r = conn.execute(
         """SELECT s.id, s.stem, s.source,
@@ -220,13 +241,11 @@ def count_never_reviewed():
 
 
 def stats():
-    """统计：总量 / 考点分布 / 评级分布 / 薄弱考点。"""
     conn = get_conn()
     total = conn.execute("SELECT COUNT(*) FROM sentences").fetchone()[0]
     total_reviews = conn.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
     reviewed = conn.execute("SELECT COUNT(DISTINCT sentence_id) FROM reviews").fetchone()[0]
 
-    # 考点分布：统计句子库中每个考点的句子数
     point_counts = {p: 0 for p in config.EXAM_POINTS}
     for r in conn.execute("SELECT exam_points FROM sentences").fetchall():
         if not r["exam_points"]:
@@ -237,7 +256,6 @@ def stats():
     by_point = [{"point": p, "count": c} for p, c in point_counts.items() if c > 0]
     by_point.sort(key=lambda x: -x["count"])
 
-    # 评级分布
     by_rating = [
         dict(r)
         for r in conn.execute(
@@ -245,7 +263,6 @@ def stats():
         ).fetchall()
     ]
 
-    # 薄弱考点：复习时评为“完全不会/意思对但表达差”的句子，按考点累计翻车次数
     weak = {}
     for r in conn.execute(
         """SELECT r.self_rating AS rating, s.exam_points AS pts
@@ -257,6 +274,8 @@ def stats():
     weak_points = [{"point": p, "misses": c} for p, c in weak.items()]
     weak_points.sort(key=lambda x: -x["misses"])
 
+    phrase_total = conn.execute("SELECT COUNT(*) FROM phrases").fetchone()[0]
+    phrase_mastered = conn.execute("SELECT COUNT(*) FROM phrases WHERE mastered = 1").fetchone()[0]
     conn.close()
     return {
         "total_sentences": total,
@@ -265,11 +284,12 @@ def stats():
         "by_point": by_point,
         "by_rating": by_rating,
         "weak_points": weak_points,
+        "phrase_total": phrase_total,
+        "phrase_mastered": phrase_mastered,
     }
 
 
 def export_rows():
-    """导出 CSV：给机器学习作业当标注数据用。"""
     conn = get_conn()
     rows = [
         dict(r)
@@ -278,5 +298,67 @@ def export_rows():
             "FROM sentences ORDER BY id"
         ).fetchall()
     ]
+    conn.close()
+    return rows
+
+
+# ---------------- 必背短语 ----------------
+
+def add_phrase(phrase, translation, context="", example="", sentence_id=None):
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT INTO phrases (sentence_id, phrase, translation, context, example) VALUES (?,?,?,?,?)",
+        (sentence_id, phrase, translation, context, example),
+    )
+    conn.commit()
+    conn.close()
+    return cur.lastrowid
+
+
+def list_phrases(include_mastered=True):
+    conn = get_conn()
+    if include_mastered:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM phrases ORDER BY mastered ASC, id DESC").fetchall()]
+    else:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM phrases WHERE mastered = 0 ORDER BY id DESC").fetchall()]
+    conn.close()
+    return rows
+
+
+def delete_phrase(pid):
+    conn = get_conn()
+    conn.execute("DELETE FROM phrases WHERE id = ?", (pid,))
+    conn.commit()
+    conn.close()
+
+
+def set_phrase_mastered(pid, flag):
+    conn = get_conn()
+    conn.execute("UPDATE phrases SET mastered = ? WHERE id = ?", (1 if flag else 0, pid))
+    conn.commit()
+    conn.close()
+
+
+def phrases_by_sentence(sid):
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM phrases WHERE sentence_id = ? ORDER BY id", (sid,)).fetchall()]
+    conn.close()
+    return rows
+
+
+def quiz_phrases(n=5):
+    """随机抽 n 个短语（优先未掌握的），用于匹配出题。"""
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute(
+        """SELECT * FROM phrases WHERE mastered = 0 ORDER BY RANDOM() LIMIT ?""", (n,)
+    ).fetchall()]
+    if len(rows) < n:
+        extra = [dict(r) for r in conn.execute(
+            """SELECT * FROM phrases WHERE mastered = 1 ORDER BY RANDOM() LIMIT ?""",
+            (n - len(rows),)).fetchall()]
+        rows += extra
     conn.close()
     return rows
