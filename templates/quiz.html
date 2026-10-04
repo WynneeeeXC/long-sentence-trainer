@@ -1,11 +1,18 @@
 {% extends "base.html" %}
-{% block title %}出题 · 长难句训练营{% endblock %}
+{% block title %}出题 · Wynneeee's training{% endblock %}
 {% block content %}
-<h1>短语匹配练习</h1>
-<p class="sub">选中文短语对应的正确英文表达——答完再看得分</p>
+<h1>短语练习</h1>
+<p class="sub">三种题型：英选中 / 英译中听写 / 中译英造句——混合着练，练的是真正会用</p>
+
+<div class="tabs">
+  <div class="tab on" data-m="mix">混合</div>
+  <div class="tab" data-m="match">英选中文</div>
+  <div class="tab" data-m="dictation">英译中听写</div>
+  <div class="tab" data-m="recall">中译英造句</div>
+</div>
 
 <div class="card" id="quiz-start">
-  <p class="mut">从短语本随机抽 5 个短语，4 选 1。</p>
+  <p class="mut">从短语本随机抽 5 个短语。</p>
   <button class="btn primary" onclick="startQuiz()">开始出题</button>
   <span id="quiz-empty" style="display:none" class="mut">短语本还空着，先去 <a href="/">分析句子</a> 收录几个短语。</span>
 </div>
@@ -14,19 +21,35 @@
   <div class="card">
     <div class="mut" id="quiz-progress"></div>
     <div class="block" id="quiz-q"></div>
-    <div id="quiz-opts" style="display:flex;flex-direction:column;gap:10px"></div>
-  </div>
-  <div id="quiz-result" class="card" style="display:none">
-    <h3>本轮结果</h3>
-    <div id="result-detail"></div>
-    <div style="margin-top:14px">
-      <button class="btn primary" onclick="startQuiz()">再来一轮</button>
+    <div id="quiz-input"></div>
+    <div id="quiz-feedback" style="margin-top:12px"></div>
+    <div style="margin-top:14px;text-align:right">
+      <button class="btn primary" id="btn-ok" style="display:none" onclick="confirmAnswer()">确认</button>
+      <button class="btn ghost" id="btn-next-q" style="display:none" onclick="nextQ()">下一题 →</button>
     </div>
   </div>
 </div>
 
+<div class="card" id="quiz-result" style="display:none">
+  <h3>本轮结果</h3>
+  <div id="result-detail"></div>
+  <div style="margin-top:14px">
+    <button class="btn primary" onclick="startQuiz()">再来一轮</button>
+  </div>
+</div>
+
 <script>
-let questions = [], idx = 0, score = 0, answered = [];
+let mode = 'mix', questions = [], idx = 0, score = 0, answered = [];
+let qtype = 'match';   // 当前题的实际题型
+
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+    t.classList.add('on');
+    mode = t.dataset.m;
+  });
+});
+
 function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 
 async function startQuiz(){
@@ -42,50 +65,103 @@ async function startQuiz(){
   showQ();
 }
 
-function showQ(){
-  const q = questions[idx];
-  document.getElementById('quiz-progress').textContent = '第 ' + (idx + 1) + ' / ' + questions.length + ' 题';
-  document.getElementById('quiz-q').innerHTML =
-    '<div class="block-title">哪个表达对应：<strong>' + esc(q.answer) + '</strong></div>';
-  const box = document.getElementById('quiz-opts');
-  box.innerHTML = '';
-  q.options.forEach(opt => {
-    const b = document.createElement('button');
-    b.className = 'rating-btn';
-    b.style.textAlign = 'left';
-    b.textContent = opt;
-    b.onclick = () => pick(opt, q, b);
-    box.appendChild(b);
-  });
+function pickType(){
+  if(mode !== 'mix') return mode;
+  const roll = Math.random();
+  if(roll < 0.45) return 'match';
+  if(roll < 0.75) return 'dictation';
+  return 'recall';
 }
 
-function pick(opt, q, btn){
+function showQ(){
+  const q = questions[idx];
+  qtype = pickType();
+  document.getElementById('quiz-progress').textContent = '第 ' + (idx + 1) + ' / ' + questions.length + ' 题 · 题型：'
+    + ({match:'英选中文', dictation:'英译中听写', recall:'中译英造句'})[qtype];
+  const qb = document.getElementById('quiz-q');
+  const inputBox = document.getElementById('quiz-input');
+  const fb = document.getElementById('quiz-feedback');
+  fb.innerHTML = '';
+  document.getElementById('btn-ok').style.display = 'none';
+  document.getElementById('btn-next-q').style.display = 'none';
+
+  if(qtype === 'match'){
+    qb.innerHTML = '<div class="block-title">下面哪个中文意思对应：<strong>' + esc(q.en) + '</strong></div>'
+      + (q.context ? '<div class="mut">出处：' + esc(q.context) + '</div>' : '');
+    inputBox.innerHTML = '';
+    (q.options || []).forEach(opt => {
+      const b = document.createElement('button');
+      b.className = 'rating-btn';
+      b.style.display = 'block';
+      b.style.width = '100%';
+      b.style.textAlign = 'left';
+      b.style.marginBottom = '8px';
+      b.textContent = opt;
+      b.onclick = () => pickMatch(opt, q, b);
+      inputBox.appendChild(b);
+    });
+  } else if(qtype === 'dictation'){
+    qb.innerHTML = '<div class="block-title">听写：写出下面表达的中文意思</div><div class="sentence-stem">' + esc(q.en) + '</div>'
+      + (q.context ? '<div class="mut" style="margin-top:8px">出处：' + esc(q.context) + '</div>' : '');
+    inputBox.innerHTML = '<textarea id="write-ans" placeholder="写出中文翻译…" style="min-height:64px"></textarea>';
+    document.getElementById('btn-ok').style.display = '';
+  } else { // recall 中译英造句
+    qb.innerHTML = '<div class="block-title">造句：根据中文意思，写出对应的英文表达（最好再造个短句）</div><div class="sentence-stem">' + esc(q.zh) + '</div>';
+    inputBox.innerHTML = '<textarea id="write-ans" placeholder="英文表达 + 一个例句…" style="min-height:64px"></textarea>';
+    document.getElementById('btn-ok').style.display = '';
+  }
+}
+
+function pickMatch(opt, q, btn){
   const ok = opt === q.answer;
   if(ok) score++;
-  answered.push({ q, chosen: opt, ok });
-  document.querySelectorAll('#quiz-opts .rating-btn').forEach(b => {
+  answered.push({ q, qtype, answer: opt, ok });
+  document.querySelectorAll('#quiz-input .rating-btn').forEach(b => {
     b.disabled = true;
     if(b.textContent === q.answer) b.classList.add('on');
     else if(b === btn && !ok) b.style.opacity = .5;
   });
-  setTimeout(() => {
-    idx++;
-    if(idx < questions.length) showQ();
-    else showResult();
-  }, 900);
+  showFeedback(q, ok, opt);
+  document.getElementById('btn-next-q').style.display = '';
+}
+
+function confirmAnswer(){
+  const q = questions[idx];
+  const my = document.getElementById('write-ans').value.trim();
+  if(!my){ alert('先写点什么再确认'); return; }
+  const target = qtype === 'dictation' ? q.zh : q.en;
+  const ok = target && my.toLowerCase().includes(target.toLowerCase());
+  if(ok) score++;
+  answered.push({ q, qtype, answer: my, ok });
+  showFeedback(q, ok, my, target);
+  document.getElementById('btn-next-q').style.display = '';
+  document.getElementById('btn-ok').style.display = 'none';
+}
+
+function showFeedback(q, ok, my){
+  const fb = document.getElementById('quiz-feedback');
+  const correct = qtype === 'match' ? q.zh : (qtype === 'dictation' ? ('标准：' + q.zh) : ('标准：' + q.en));
+  fb.innerHTML = '<div class="' + (ok ? 'trans' : 'tips') + '">'
+    + '<strong>' + (ok ? '✓ 对了' : '✗ 对照一下') + '</strong> 你答：' + esc(my || '') + '<br>' + esc(correct) + '</div>';
+}
+
+function nextQ(){
+  idx++;
+  if(idx < questions.length) showQ();
+  else showResult();
 }
 
 function showResult(){
-  document.getElementById('quiz-q').parentElement.style.display = 'none';
-  document.getElementById('quiz-opts').innerHTML = '';
+  document.getElementById('quiz-body').style.display = 'none';
   const r = document.getElementById('quiz-result');
   r.style.display = '';
   document.getElementById('result-detail').innerHTML =
-    '<div style="font-size:22px;font-weight:700;color:var(--p1)">' + score + ' / ' + questions.length + '</div>'
-    + answered.map(a =>
-      '<div class="block"><div>' + esc(a.q.en) + '</div>'
-      + '<div class="mut">你选：' + esc(a.chosen) + (a.ok ? ' ✓' : ' ✗ 正确：' + esc(a.q.answer)) + '</div></div>'
-    ).join('');
+    '<div style="font-size:22px;font-weight:700;color:var(--p1)">得分 ' + score + ' / ' + questions.length + '</div>'
+    + answered.map(a => {
+      const t = ({match:'英选中', dictation:'听写', recall:'造句'})[a.qtype];
+      return '<div class="block"><div>' + t + ' · <strong>' + esc(a.q.en) + '</strong></div>'
+        + '<div class="mut">你答：' + esc(a.answer) + (a.ok ? ' ✓' : ' ✗ 正确：' + esc(a.qtype === 'recall' ? a.q.en : a.q.zh)) + '</div></div>';
+    }).join('');
 }
 </script>
 {% endblock %}

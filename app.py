@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""考研英语长难句训练营 · Flask 主应用"""
+"""Wynneeee's training · Flask 主应用（考研英语：长难句 + 短语本 + 文章精读）"""
 import csv
 import io
 import os
 import re
 import random
+import tempfile
+import uuid
 
 import markdown as md
 from flask import Flask, Response, jsonify, render_template, request
@@ -12,6 +14,7 @@ from flask import Flask, Response, jsonify, render_template, request
 import ai_service
 import config
 import database as db
+import ocr_helper
 
 app = Flask(__name__)
 
@@ -121,7 +124,8 @@ def detail(sid):
         return render_template("404.html"), 404
     similar = db.similar_sentences(sid, s["points_list"])
     phrases = db.phrases_by_sentence(sid)
-    return render_template("detail.html", s=s, similar=similar, phrases=phrases)
+    reviews = db.get_reviews_by_sentence(sid, limit=20)
+    return render_template("detail.html", s=s, similar=similar, phrases=phrases, reviews=reviews)
 
 
 @app.post("/api/sentence/<int:sid>/note")
@@ -154,11 +158,13 @@ def api_review_next():
     if not s:
         return jsonify({"ok": False, "message": "句子库还是空的，先去分析几句吧"})
     full = db.get_sentence(s["id"])
+    history = db.get_reviews_by_sentence(s["id"], limit=5)
     return jsonify({"ok": True, "sentence": {
         "id": s["id"], "stem": s["stem"], "source": s["source"],
         "review_count": s["review_count"],
         "full_translation": full["full_translation"],
         "points_list": full["points_list"],
+        "history": history,
         "total": db.count_sentences(),
         "remaining": db.count_never_reviewed(),
     }})
@@ -170,7 +176,29 @@ def api_review_submit():
     rating = data.get("self_rating", "")
     if rating not in config.RATINGS:
         return jsonify({"ok": False, "error": "评级无效"})
-    db.insert_review(data.get("sentence_id"), data.get("user_translation", ""), rating)
+    sid = data.get("sentence_id")
+    s = db.get_sentence(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "句子不存在"})
+    my = (data.get("user_translation") or "").strip()
+    prev = ""
+    if my:
+        prev_rows = db.get_reviews_by_sentence(sid, limit=1)
+        if prev_rows and prev_rows[0].get("user_translation"):
+            prev = prev_rows[0]["user_translation"]
+    critique = ai_service.review_critique(
+        s["stem"], my, prev, s["full_translation"] or "")
+    db.insert_review(sid, my, rating, critique)
+    return jsonify({"ok": True, "critique": critique})
+
+
+@app.post("/api/review/rate")
+def api_review_rate():
+    data = request.get_json(silent=True) or {}
+    rating = data.get("self_rating", "")
+    if rating not in config.RATINGS:
+        return jsonify({"ok": False, "error": "评级无效"})
+    db.update_last_review_rating(data.get("sentence_id"), rating)
     return jsonify({"ok": True})
 
 
@@ -265,11 +293,92 @@ def api_quiz():
         questions.append({
             "id": p["id"],
             "en": p["phrase"],
-            "answer": p["translation"],
+            "zh": p["translation"] or "",
+            "answer": p["translation"] or "",
             "options": options,
             "context": p["context"],
         })
     return jsonify({"ok": True, "questions": questions})
+
+
+# ---------------- 快捷收录（手机友好） ----------------
+
+@app.route("/quick")
+def quick_page():
+    return render_template("quick.html", sources=config.SOURCES, exam_points=config.EXAM_POINTS)
+
+
+# ---------------- 文章精读 ----------------
+
+@app.route("/passage")
+def passage_page():
+    return render_template("passage.html", history=db.list_passages(), view=None)
+
+
+@app.route("/passage/<int:pid>")
+def passage_detail(pid):
+    p = db.get_passage(pid)
+    if not p:
+        return render_template("404.html"), 404
+    return render_template("passage.html", history=db.list_passages(), view=p)
+
+
+@app.post("/api/passage/analyze")
+def api_passage_analyze():
+    """两种输入：JSON {"text": 文章} 或 multipart 表单上传图片（OCR）。"""
+    text = ""
+    if request.content_type and "multipart" in request.content_type:
+        f = request.files.get("image")
+        if not f or not f.filename:
+            return jsonify({"ok": False, "error": "没有收到图片"})
+        ext = os.path.splitext(f.filename)[1].lower() or ".jpg"
+        if ext not in (".jpg", ".jpeg", ".png", ".bmp"):
+            return jsonify({"ok": False, "error": "仅支持 jpg/png/bmp 图片"})
+        tmp = os.path.join(tempfile.gettempdir(), f"passage_{uuid.uuid4().hex}{ext}")
+        f.save(tmp)
+        try:
+            ocr = ocr_helper.ocr_image(tmp)
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        if not ocr["ok"]:
+            return jsonify({"ok": False, "error": ocr["error"]})
+        text = ocr["text"]
+    else:
+        data = request.get_json(silent=True) or {}
+        text = (data.get("text") or "").strip()
+        if not text:
+            return jsonify({"ok": False, "error": "文章内容不能为空"})
+    if len(text) < 80:
+        return jsonify({"ok": False, "error": "内容太短，看起来不是一篇文章（至少 80 个字符）"})
+    result = ai_service.analyze_passage(text)
+    if "error" in result:
+        return jsonify({"ok": False, "error": result["error"]})
+    return jsonify({"ok": True, "result": result, "text": text})
+
+
+@app.post("/api/passage/save")
+def api_passage_save():
+    data = request.get_json(silent=True) or {}
+    original = (data.get("original_text") or "").strip()
+    result = data.get("result")
+    if not original or not result:
+        return jsonify({"ok": False, "error": "缺少原文或分析结果"})
+    pid = db.add_passage(
+        title=(data.get("title") or "").strip(),
+        source=(data.get("source") or "").strip(),
+        original_text=original,
+        result=result,
+    )
+    return jsonify({"ok": True, "id": pid})
+
+
+@app.post("/api/passage/<int:pid>/delete")
+def api_passage_delete(pid):
+    db.delete_passage(pid)
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":

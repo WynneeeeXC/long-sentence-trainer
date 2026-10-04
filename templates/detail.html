@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}句子详情 · 长难句训练营{% endblock %}
+{% block title %}句子详情 · Wynneeee's training{% endblock %}
 {% block content %}
 <a href="/list" class="btn ghost" style="margin-bottom:14px">← 返回句子库</a>
 <h1>句子详情</h1>
@@ -91,6 +91,37 @@
     <div style="flex:0 0 auto"><button class="btn soft" onclick="addPhrase({{ s.id }})">收录</button></div>
   </div>
 </div>
+
+{% if reviews %}
+<div class="card">
+  <h3>复习历史（每次译文 + AI 点评）</h3>
+  {% for r in reviews %}
+  <div class="block">
+    <div class="block-title">
+      第 {{ loop.revindex }} 次复习 · {{ r.reviewed_at }}
+      {% if r.self_rating %}<span class="badge">{{ r.self_rating }}</span>{% endif %}
+    </div>
+    {% if r.user_translation %}<div><strong>我的译文：</strong>{{ r.user_translation }}</div>{% endif %}
+    {% if r.critique_obj %}
+    <div style="margin-top:8px">
+      <div class="mut"><strong>AI 总评：</strong>{{ r.critique_obj.verdict or '' }}</div>
+      {% if r.critique_obj.problems %}
+      <ul style="margin:6px 0;padding-left:18px;font-size:13px">
+        {% for p in r.critique_obj.problems %}<li>{{ p }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+      {% if r.critique_obj.better %}<div class="trans" style="margin-top:6px;font-size:13px"><strong>更地道：</strong>{{ r.critique_obj.better }}</div>{% endif %}
+      {% if r.critique_obj.advanced %}
+      <div style="margin-top:6px;font-size:13px"><strong>高级表达：</strong>
+        {% for a in r.critique_obj.advanced %}<span class="badge">{{ a.en }}</span>{% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 
 <div class="card">
   <h3>我的笔记</h3>

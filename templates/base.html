@@ -2,20 +2,25 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{% block title %}考研长难句训练营{% endblock %}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#4f7a5b">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+<title>{% block title %}Wynneeee's training{% endblock %}</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
 <nav class="nav">
   <div class="wrap nav-inner">
-    <a class="brand" href="/">长难句训练营</a>
+    <a class="brand" href="/">Wynneeee's training</a>
     <div class="nav-links">
       <a href="/" class="{{ 'active' if request.path == '/' else '' }}">分析</a>
+      <a href="/quick" class="{{ 'active' if request.path == '/quick' else '' }}">快捷收录</a>
       <a href="/list" class="{{ 'active' if request.path == '/list' else '' }}">句子库</a>
       <a href="/review" class="{{ 'active' if request.path == '/review' else '' }}">复习</a>
       <a href="/phrases" class="{{ 'active' if request.path == '/phrases' else '' }}">短语本</a>
       <a href="/quiz" class="{{ 'active' if request.path == '/quiz' else '' }}">出题</a>
+      <a href="/passage" class="{{ 'active' if request.path == '/passage' else '' }}">文章精读</a>
       <a href="/stats" class="{{ 'active' if request.path == '/stats' else '' }}">统计</a>
     </div>
   </div>

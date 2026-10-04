@@ -93,3 +93,24 @@ table.seg tr:last-child td{border-bottom:none}
 .notice.show{opacity:1}
 .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px}
 @keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- 移动端适配（手机访问同局域网电脑） ---------- */
+@media (max-width:720px){
+  .wrap{padding:0 14px}
+  .nav-inner{height:auto;flex-direction:column;align-items:stretch;padding:10px 0;gap:8px}
+  .nav-links{display:flex;overflow-x:auto;gap:4px;padding-bottom:4px;-webkit-overflow-scrolling:touch}
+  .nav-links a{margin-left:0;padding:6px 10px;white-space:nowrap;font-size:13px}
+  h1{font-size:21px}
+  .row{flex-direction:column;align-items:stretch}
+  .row>*{flex:none}
+  .card{padding:16px}
+  .clause{flex-direction:column}
+  .clause .ct{flex:none;align-self:flex-start}
+  table.seg td:first-child{width:48%}
+  .stat-cards{grid-template-columns:repeat(2,1fr)}
+  .bar-label{flex-basis:84px;font-size:12px}
+  .btn{width:100%;justify-content:center}
+  .btn.ghost,.btn.soft,.btn.danger{width:auto}
+  textarea{font-size:16px}   /* 防 iOS 聚焦缩放 */
+}
+

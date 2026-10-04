@@ -188,3 +188,105 @@ def analyze_sentence(text: str, user_translation: str = "") -> dict:
     if config.MOCK_MODE:
         return analyze_mock(text, user_translation)
     return analyze_with_ai(text, user_translation)
+
+
+# ---------------- 复习点评（含历史对比 + 高级表达） ----------------
+
+def review_critique(text: str, current_translation: str, previous_translation: str = "",
+                    full_translation: str = "") -> dict:
+    """复习场景的译文点评：可对比上一次译文，附带高级表达建议。"""
+    if config.MOCK_MODE:
+        return {
+            "verdict": "（离线演示模式）",
+            "problems": ["配置 DEEPSEEK_API_KEY 后，AI 会对比你的译文和历史译文逐条点评"],
+            "better": full_translation or "",
+            "improvement": "（离线模式无历史对比）",
+            "advanced": [],
+        }
+    user = (
+        f"英文原句：{text}\n"
+        f"本次译文：{current_translation}\n"
+    )
+    if previous_translation:
+        user += f"上次译文：{previous_translation}\n"
+    if full_translation:
+        user += f"参考翻译：{full_translation}\n"
+    try:
+        resp = _get_client().chat.completions.create(
+            model=config.DEEPSEEK_MODEL,
+            messages=[
+                {"role": "system", "content": REVIEW_CRITIQUE_PROMPT},
+                {"role": "user", "content": user},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+        )
+        data = _parse_result(resp.choices[0].message.content or "")
+        if "error" in data:
+            return data
+        data["verdict"] = data.get("verdict") or ""
+        data["problems"] = data.get("problems") or []
+        data["better"] = data.get("better") or ""
+        data["improvement"] = data.get("improvement") or ""
+        data["advanced"] = data.get("advanced") or []
+        return data
+    except Exception as e:
+        return {"error": f"AI 调用失败：{e}"}
+
+
+REVIEW_CRITIQUE_PROMPT = (
+    "你是考研英语翻译批改老师。用户复习一个句子时写了译文，你要一针见血点评。\n"
+    "严格输出一个 JSON 对象，格式：\n"
+    '{"verdict": "一句话总评", '
+    '"problems": ["具体问题，指出对应英文位置和原因"], '
+    '"better": "更地道、更贴原文的完整译文", '
+    '"improvement": "对比上次译文，这次进步或退步在哪里（没有上次译文就写首次练习）", '
+    '"advanced": [{"en": "高级表达", "zh": "意思", "usage": "在句子里怎么用/替换了哪个普通说法"}]}\n'
+    "要求：problems 不超过 3 条、advanced 给出 1-3 个能把译文说得更高级的表达（替换口语化/直译说法）。"
+)
+
+
+# ---------------- 文章精读 ----------------
+
+PASSAGE_SYSTEM_PROMPT = (
+    "你是考研英语阅读精读专家。把用户给的一篇考研难度英文文章，做成一份「不要废话」的精读笔记，严格输出一个 JSON 对象：\n"
+    '{"vocab": [{"word": "熟词僻义词/表达", "meaning": "在文中的含义", "tip": "为什么是僻义/记忆点"}], '
+    '"phrases": [{"en": "外刊高频词组", "zh": "中文", "tip": "用法"}], '
+    '"paragraphs": [{"n": "段落序号", "summary": "一句话概括该段主旨"}], '
+    '"translation": "整篇通顺的中文翻译（按段落连贯翻译）", '
+    '"main_idea": "全文中心思想（一两句话）", '
+    '"attitude": "作者整体态度：支持/反对/怀疑/客观中立（任选其一，可加一两个词修饰）", '
+    '"questions": [{"q": "考研阅读理解题题干", "options": ["A. ...", "B. ...", "C. ...", "D. ..."], '
+    '"answer": "正确选项字母", "explain": "解析（为什么对/为什么错）"}]}\n'
+    "要求：vocab 3-6 条、phrases 3-6 条、paragraphs 逐段、questions 恰好 5 题，题型贴近考研阅读（主旨/细节/推断/态度/词义），选项必须 4 个且带 A./B./C./D. 前缀。"
+)
+
+
+def analyze_passage(text: str) -> dict:
+    """整篇文章精读：熟词僻义/高频词组/段落主旨/全文翻译/中心思想/态度/5 道选择题。"""
+    if config.MOCK_MODE:
+        return {"error": "（离线演示模式不支持文章精读）在 .env 配置 DEEPSEEK_API_KEY 后可用"}
+    try:
+        resp = _get_client().chat.completions.create(
+            model=config.DEEPSEEK_MODEL,
+            messages=[
+                {"role": "system", "content": PASSAGE_SYSTEM_PROMPT},
+                {"role": "user", "content": f"请精读这篇文章并按要求输出：\n\n{text[:6000]}"},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+        )
+        content = resp.choices[0].message.content or ""
+        data = _parse_result(content)
+        if "error" in data:
+            return data
+        data["vocab"] = data.get("vocab") or []
+        data["phrases"] = data.get("phrases") or []
+        data["paragraphs"] = data.get("paragraphs") or []
+        data["translation"] = data.get("translation") or ""
+        data["main_idea"] = data.get("main_idea") or ""
+        data["attitude"] = data.get("attitude") or "客观中立"
+        data["questions"] = data.get("questions") or []
+        return data
+    except Exception as e:
+        return {"error": f"AI 调用失败：{e}"}

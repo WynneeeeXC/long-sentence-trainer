@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}复习 · 长难句训练营{% endblock %}
+{% block title %}复习 · Wynneeee's training{% endblock %}
 {% block content %}
 <h1>复习模式</h1>
-<p class="sub" id="progress">先自己翻译，再看答案对比，最后标记表现</p>
+<p class="sub" id="progress">先自己翻译 → AI 点评（对比你上次的译文）→ 标记表现</p>
 
 <div class="card" id="step1">
   <div class="block">
@@ -10,10 +10,15 @@
     <div class="sentence-stem" id="rv-stem" style="font-size:18px"></div>
     <div class="mut" id="rv-meta" style="margin-top:8px"></div>
   </div>
+  <div class="block" id="prev-wrap" style="display:none">
+    <div class="block-title">你上次的译文（AI 会拿它和这次对比）</div>
+    <div id="rv-prev"></div>
+    <div class="mut" id="rv-prev-meta"></div>
+  </div>
   <label for="myTrans">我的翻译</label>
   <textarea id="myTrans" placeholder="先别急着看答案，自己试着翻译一遍…"></textarea>
   <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
-    <button class="btn primary" onclick="checkAnswer()">我翻译完了，看答案</button>
+    <button class="btn primary" id="btn-check" onclick="checkAnswer()">翻译完了，要 AI 点评</button>
     <button class="btn ghost" onclick="nextSentence()">换一句</button>
   </div>
 </div>
@@ -23,29 +28,40 @@
     <div class="block-title">我的翻译</div>
     <div id="rv-mine"></div>
   </div>
+
+  <div class="block" id="rv-critique-wrap" style="display:none">
+    <div class="block-title">AI 一针见血点评</div>
+    <div><strong>总评：</strong><span id="c-verdict"></span></div>
+    <div style="margin-top:8px"><strong>问题点：</strong></div>
+    <div id="c-problems"></div>
+    <div class="trans" id="c-better" style="margin-top:10px"></div>
+    <div class="tips" id="c-improvement" style="margin-top:10px"></div>
+    <div id="c-advanced" style="margin-top:10px"></div>
+  </div>
+
   <div class="block">
-    <div class="block-title">AI 整句翻译</div>
+    <div class="block-title">AI 整句翻译（参考）</div>
     <div class="trans" id="rv-ai"></div>
   </div>
   <div class="block">
     <div class="block-title">考点参考</div>
     <div id="rv-points"></div>
   </div>
-  <label>这次翻译得怎么样？（标记后自动记录到统计）</label>
+  <label>这次翻译得怎么样？（标记后记录到统计）</label>
   <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
     <button type="button" class="rating-btn" data-r="完全不会" onclick="rate(this)">完全不会</button>
     <button type="button" class="rating-btn" data-r="意思对但表达差" onclick="rate(this)">意思对但表达差</button>
     <button type="button" class="rating-btn" data-r="翻译准确" onclick="rate(this)">翻译准确</button>
   </div>
   <div style="margin-top:14px;text-align:right">
-    <button class="btn primary" id="btn-next" onclick="submitAndNext()" disabled>下一句 →</button>
+    <button class="btn primary" id="btn-next" onclick="nextSentence()">下一句 →</button>
   </div>
 </div>
 
 <div class="empty" id="rv-empty" style="display:none">句子库是空的，先去 <a href="/">分析</a> 几句吧</div>
 
 <script>
-let current = null, chosenRating = null;
+let current = null;
 
 function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 async function post(url, body){
@@ -54,9 +70,7 @@ async function post(url, body){
 }
 
 async function nextSentence(){
-  chosenRating = null;
   document.querySelectorAll('.rating-btn').forEach(b => b.classList.remove('on'));
-  document.getElementById('btn-next').disabled = true;
   const res = await fetch('/api/review/next');
   const d = await res.json();
   if(!d.ok){
@@ -68,43 +82,81 @@ async function nextSentence(){
   current = d.sentence;
   document.getElementById('rv-stem').textContent = current.stem;
   document.getElementById('rv-meta').textContent =
-    (current.source || '未标注') + ' · 库内共 ' + current.total + ' 句 · 尚未复习 ' + current.remaining + ' 句';
+    (current.source || '未标注') + ' · 已复习 ' + current.review_count + ' 次 · 库内 ' + current.total + ' 句 · 未复习 ' + current.remaining + ' 句';
+  // 上次译文
+  const prev = (current.history || []).find(h => h.user_translation);
+  const pw = document.getElementById('prev-wrap');
+  if(prev){
+    pw.style.display = '';
+    document.getElementById('rv-prev').textContent = prev.user_translation;
+    document.getElementById('rv-prev-meta').textContent = '（' + prev.reviewed_at + ' · 自评：' + (prev.self_rating || '未标') + '）';
+  } else { pw.style.display = 'none'; }
   document.getElementById('myTrans').value = '';
   document.getElementById('step1').style.display = '';
   document.getElementById('step2').style.display = 'none';
   document.getElementById('rv-empty').style.display = 'none';
-  document.getElementById('progress').textContent = '先自己翻译，再看答案对比';
+  document.getElementById('progress').textContent = '先自己翻译 → AI 点评 → 标记表现';
   document.getElementById('myTrans').focus();
 }
 
 async function checkAnswer(){
   const my = document.getElementById('myTrans').value.trim();
   if(!my){ alert('先写下你的翻译再对比，这样才练得到'); return; }
+  const btn = document.getElementById('btn-check');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> AI 点评中…';
   document.getElementById('rv-mine').textContent = my;
   document.getElementById('rv-ai').textContent = current.full_translation || '（该句子暂无 AI 整句翻译）';
   document.getElementById('rv-points').innerHTML =
     (current.points_list || []).map(p => '<span class="badge">' + esc(p) + '</span>').join('')
     || '<span class="mut">未标注考点</span>';
+
+  const d = await post('/api/review/submit', {
+    sentence_id: current.id,
+    user_translation: my,
+    self_rating: '翻译准确'   // 占位，真正的自评在下一步
+  });
+  btn.disabled = false; btn.innerHTML = '翻译完了，要 AI 点评';
+
+  const cw = document.getElementById('rv-critique-wrap');
+  if(d.ok && d.critique && !d.critique.error){
+    const c = d.critique;
+    cw.style.display = '';
+    document.getElementById('c-verdict').textContent = c.verdict || '';
+    document.getElementById('c-problems').innerHTML = (c.problems || []).length
+      ? '<ul style="margin:4px 0;padding-left:18px">' + c.problems.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>'
+      : '<span class="mut">没有明显问题</span>';
+    document.getElementById('c-better').innerHTML = c.better ? '<strong>更地道：</strong>' + esc(c.better) : '';
+    document.getElementById('c-improvement').innerHTML = c.improvement ? '<strong>对比上次：</strong>' + esc(c.improvement) : '';
+    const adv = c.advanced || [];
+    document.getElementById('c-advanced').innerHTML = adv.length
+      ? '<div class="block-title" style="margin-bottom:6px">高级表达（背下来）</div>' + adv.map(a =>
+          '<div class="block" style="margin-bottom:8px"><strong>' + esc(a.en) + '</strong> <span class="mut">' + esc(a.zh || '') + '</span>'
+          + (a.usage ? '<div class="mut" style="margin-top:4px">' + esc(a.usage) + '</div>' : '') + '</div>'
+        ).join('')
+      : '';
+  } else {
+    cw.style.display = '';
+    document.getElementById('c-verdict').textContent = '点评暂不可用：' + (d.critique && d.critique.error || d.error || 'AI 调用失败');
+    document.getElementById('c-problems').innerHTML = '';
+    document.getElementById('c-better').innerHTML = '';
+    document.getElementById('c-improvement').innerHTML = '';
+    document.getElementById('c-advanced').innerHTML = '';
+  }
+
   document.getElementById('step1').style.display = 'none';
   document.getElementById('step2').style.display = '';
-  document.getElementById('progress').textContent = '对比完成，标记一下这次的表现';
+  document.getElementById('progress').textContent = '看看 AI 怎么点评，然后标记这次的表现';
+  document.querySelectorAll('.rating-btn').forEach(b => b.classList.remove('on'));
 }
 
 function rate(btn){
-  chosenRating = btn.dataset.r;
   document.querySelectorAll('.rating-btn').forEach(b => b.classList.remove('on'));
   btn.classList.add('on');
-  document.getElementById('btn-next').disabled = false;
-}
-
-async function submitAndNext(){
-  if(!chosenRating){ alert('请先标记这次翻译的表现'); return; }
-  await post('/api/review/submit', {
-    sentence_id: current.id,
-    user_translation: document.getElementById('rv-mine').textContent,
-    self_rating: chosenRating
-  });
-  nextSentence();
+  const btnNext = document.getElementById('btn-next');
+  btnNext.disabled = false;
+  btnNext.textContent = '下一句 →';
+  // 更新刚才那条复习记录的自评（简化：重写最后一条记录）
+  post('/api/review/rate', { sentence_id: current.id, self_rating: btn.dataset.r }).catch(() => {});
 }
 
 nextSentence();

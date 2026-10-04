@@ -1,0 +1,17 @@
+{
+  "name": "Wynneeee's training",
+  "short_name": "Wynneeee",
+  "description": "考研英语：长难句分析、必背短语、文章精读",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f6ef",
+  "theme_color": "#4f7a5b",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

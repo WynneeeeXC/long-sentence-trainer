@@ -55,6 +55,20 @@ def init_db():
             created_at  TIMESTAMP DEFAULT (datetime('now','localtime'))
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS passages (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            title       TEXT DEFAULT '',
+            source      TEXT DEFAULT '',
+            original_text TEXT NOT NULL,
+            result      TEXT,
+            created_at  TIMESTAMP DEFAULT (datetime('now','localtime'))
+        )
+    """)
+    # reviews 补列（复习点评 JSON）
+    rev_cols = {r[1] for r in c.execute("PRAGMA table_info(reviews)").fetchall()}
+    if "critique" not in rev_cols:
+        c.execute("ALTER TABLE reviews ADD COLUMN critique TEXT")
     # 补列：旧库逐列补齐
     existing = {r[1] for r in c.execute("PRAGMA table_info(sentences)").fetchall()}
     for col, ddl in {
@@ -201,15 +215,40 @@ def delete_sentence(sid):
     conn.close()
 
 
-def insert_review(sid, user_translation, self_rating):
+def insert_review(sid, user_translation, self_rating, critique=None):
     conn = get_conn()
     cur = conn.execute(
-        "INSERT INTO reviews (sentence_id, user_translation, self_rating) VALUES (?,?,?)",
-        (sid, user_translation, self_rating),
+        "INSERT INTO reviews (sentence_id, user_translation, self_rating, critique) VALUES (?,?,?,?)",
+        (sid, user_translation, self_rating, _j(critique)),
     )
     conn.commit()
     conn.close()
     return cur.lastrowid
+
+
+def update_last_review_rating(sid, rating):
+    """更新某句最后一条复习记录的自评（提交后再标记）。"""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE reviews SET self_rating = ? WHERE id = "
+        "(SELECT id FROM reviews WHERE sentence_id = ? ORDER BY id DESC LIMIT 1)",
+        (rating, sid),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_reviews_by_sentence(sid, limit=10):
+    """某句的全部复习记录（最新在前），含每次翻译、自评、AI 点评。"""
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, user_translation, self_rating, critique, reviewed_at "
+        "FROM reviews WHERE sentence_id = ? ORDER BY id DESC LIMIT ?", (sid, limit)
+    ).fetchall()]
+    conn.close()
+    for r in rows:
+        r["critique_obj"] = json.loads(r["critique"]) if r["critique"] else None
+    return rows
 
 
 def next_review_sentence():
@@ -362,3 +401,43 @@ def quiz_phrases(n=5):
         rows += extra
     conn.close()
     return rows
+
+
+# ---------------- 文章精读 ----------------
+
+def add_passage(title, source, original_text, result):
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT INTO passages (title, source, original_text, result) VALUES (?,?,?,?)",
+        (title, source, original_text, _j(result)),
+    )
+    conn.commit()
+    conn.close()
+    return cur.lastrowid
+
+
+def get_passage(pid):
+    conn = get_conn()
+    r = conn.execute("SELECT * FROM passages WHERE id = ?", (pid,)).fetchone()
+    conn.close()
+    if not r:
+        return None
+    d = dict(r)
+    d["result_obj"] = json.loads(d["result"]) if d["result"] else None
+    return d
+
+
+def list_passages(limit=30):
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, title, source, created_at FROM passages ORDER BY id DESC LIMIT ?",
+        (limit,)).fetchall()]
+    conn.close()
+    return rows
+
+
+def delete_passage(pid):
+    conn = get_conn()
+    conn.execute("DELETE FROM passages WHERE id = ?", (pid,))
+    conn.commit()
+    conn.close()

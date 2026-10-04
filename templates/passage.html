@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+{% block title %}文章精读 · Wynneeee's training{% endblock %}
+{% block content %}
+<h1>文章精读</h1>
+<p class="sub">上传整篇阅读（图片或文字）→ 熟词僻义 / 高频词组 / 段落主旨 / 全文翻译 / 中心思想与态度 / 5 道考研选择题</p>
+
+{% if view %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+    <div>
+      <h3 style="margin:0">{{ view.title or ('文章 #' ~ view.id) }}</h3>
+      <div class="mut" style="margin-top:4px">{{ view.source or '' }} · {{ view.created_at }}</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn ghost" onclick="location.href='/passage'">新精读</button>
+      <button class="btn danger" onclick="delPassage({{ view.id }})">删除</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="card" id="input-card">
+  <div class="tabs">
+    <div class="tab on" data-t="text">粘贴文字</div>
+    <div class="tab" data-t="image">上传图片（OCR）</div>
+  </div>
+  <div class="step active" id="in-text">
+    <label for="p-text">整篇文章（段落间用空行隔开，识别更准）</label>
+    <textarea id="p-text" placeholder="把整篇阅读粘进来…" style="min-height:200px"></textarea>
+  </div>
+  <div class="step" id="in-image">
+    <label for="p-file">选择图片（手机拍照/截图均可，支持 jpg/png/bmp）</label>
+    <input type="file" id="p-file" accept=".jpg,.jpeg,.png,.bmp">
+    <div class="mut" id="img-name"></div>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <div>
+      <label for="p-title">标题（可选）</label>
+      <input type="text" id="p-title" placeholder="如 2015 年 Text 1">
+    </div>
+    <div style="flex:0 0 auto">
+      <button class="btn primary" id="btn-analyze" onclick="analyzePassage()">AI 精读</button>
+    </div>
+  </div>
+</div>
+
+<div id="result-wrap" style="display:none">
+  <div class="card">
+    <h3>熟词僻义 <span class="mut">（a）</span></h3>
+    <div id="p-vocab"></div>
+  </div>
+  <div class="card">
+    <h3>外刊高频词组 <span class="mut">（b）可一键收录到短语本</span></h3>
+    <div id="p-phrases"></div>
+  </div>
+  <div class="card">
+    <h3>段落主旨 <span class="mut">（c）</span></h3>
+    <div id="p-paras"></div>
+  </div>
+  <div class="card">
+    <h3>全文翻译 <span class="mut">（b）</span></h3>
+    <div class="trans" id="p-translation"></div>
+  </div>
+  <div class="card">
+    <h3>中心思想 &amp; 作者态度 <span class="mut">（d）</span></h3>
+    <div class="block">
+      <div class="block-title">全文中心思想</div>
+      <div id="p-main"></div>
+    </div>
+    <div class="block">
+      <div class="block-title">作者整体态度</div>
+      <div id="p-attitude"></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>考研选择题（5 题）</h3>
+    <div id="p-questions"></div>
+    <div style="margin-top:14px;text-align:right">
+      <button class="btn primary" onclick="gradeQs()">交卷看解析</button>
+    </div>
+  </div>
+  <div class="card" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+    <div class="mut">分析结果可保存，方便以后回看</div>
+    <button class="btn primary" onclick="savePassage()">保存精读记录</button>
+  </div>
+</div>
+
+{% if history %}
+<div class="card">
+  <h3>历史精读记录</h3>
+  {% for h in history %}
+  <a class="sentence-link" href="/passage/{{ h.id }}">
+    <div class="block">
+      <div><strong>{{ h.title or ('文章 #' ~ h.id) }}</strong> <span class="mut">{{ h.source or '' }}</span></div>
+      <div class="mut" style="margin-top:4px">{{ h.created_at }}</div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="notice" id="notice"></div>
+<script>
+let PASSAGE_RESULT = null, PASSAGE_TEXT = '', PASSAGE_SAVED = false;
+
+function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function notice(msg){
+  const n = document.getElementById('notice');
+  n.textContent = msg; n.classList.add('show');
+  clearTimeout(notice._t);
+  notice._t = setTimeout(() => n.classList.remove('show'), 2600);
+}
+async function post(url, body){
+  const res = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  return res.json();
+}
+function setBtnLoading(btn, loading, text){
+  btn.disabled = loading;
+  btn.innerHTML = loading ? '<span class="spinner"></span> ' + text : text;
+}
+
+document.querySelectorAll('#input-card .tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('#input-card .tab').forEach(x => x.classList.remove('on'));
+    t.classList.add('on');
+    document.querySelectorAll('#input-card .step').forEach(x => x.classList.remove('active'));
+    document.getElementById('in-' + t.dataset.t).classList.add('active');
+  });
+});
+
+document.getElementById('p-file').addEventListener('change', e => {
+  const f = e.target.files[0];
+  document.getElementById('img-name').textContent = f ? f.name : '';
+});
+
+async function analyzePassage(){
+  const btn = document.getElementById('btn-analyze');
+  setBtnLoading(btn, true, '分析中…（长文约 20-40 秒）');
+  let resp;
+  const isImage = document.querySelector('#in-image').classList.contains('active');
+  try {
+    if(isImage){
+      const f = document.getElementById('p-file').files[0];
+      if(!f){ notice('先选一张图片'); setBtnLoading(btn, false, 'AI 精读'); return; }
+      const fd = new FormData();
+      fd.append('image', f);
+      resp = await fetch('/api/passage/analyze', { method: 'POST', body: fd });
+    } else {
+      const text = document.getElementById('p-text').value.trim();
+      if(!text){ notice('先粘贴文章'); setBtnLoading(btn, false, 'AI 精读'); return; }
+      resp = await fetch('/api/passage/analyze', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ text })
+      });
+    }
+    const d = await resp.json();
+    if(!d.ok){ notice('失败：' + d.error); setBtnLoading(btn, false, 'AI 精读'); return; }
+    PASSAGE_RESULT = d.result; PASSAGE_TEXT = d.text; PASSAGE_SAVED = false;
+    renderPassage(d.result);
+  } catch(err){
+    notice('请求出错：' + err.message);
+  }
+  setBtnLoading(btn, false, 'AI 精读');
+}
+
+function renderPassage(r){
+  // 熟词僻义
+  document.getElementById('p-vocab').innerHTML = (r.vocab || []).length
+    ? (r.vocab || []).map(v =>
+        '<div class="block"><div style="display:flex;gap:10px;flex-wrap:wrap"><strong>' + esc(v.word) + '</strong>'
+        + '<span>' + esc(v.meaning || '') + '</span></div>'
+        + (v.tip ? '<div class="mut" style="margin-top:4px">' + esc(v.tip) + '</div>' : '') + '</div>'
+      ).join('')
+    : '<span class="mut">无</span>';
+  // 高频词组（可收录）
+  document.getElementById('p-phrases').innerHTML = (r.phrases || []).length
+    ? (r.phrases || []).map((p, i) =>
+        '<div class="block" style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">'
+        + '<div style="flex:1"><div style="display:flex;gap:10px;flex-wrap:wrap"><strong>' + esc(p.en) + '</strong><span>' + esc(p.zh || '') + '</span></div>'
+        + (p.tip ? '<div class="mut" style="margin-top:4px">' + esc(p.tip) + '</div>' : '') + '</div>'
+        + '<button class="btn soft" data-i="' + i + '" onclick="collectPhrase(this)">收录</button></div>'
+      ).join('')
+    : '<span class="mut">无</span>';
+  // 段落主旨
+  document.getElementById('p-paras').innerHTML = (r.paragraphs || []).length
+    ? (r.paragraphs || []).map(pg =>
+        '<div class="block"><div class="block-title">第 ' + esc(pg.n) + ' 段</div><div>' + esc(pg.summary || '') + '</div></div>'
+      ).join('')
+    : '<span class="mut">未分段</span>';
+  // 全文翻译
+  document.getElementById('p-translation').textContent = r.translation || '';
+  // 中心思想 + 态度
+  document.getElementById('p-main').textContent = r.main_idea || '';
+  const att = r.attitude || '';
+  const attColor = att.includes('支持') ? 'var(--ok)' : (att.includes('反对') ? 'var(--bad)' : (att.includes('怀疑') ? 'var(--warn)' : 'var(--mut)'));
+  document.getElementById('p-attitude').innerHTML = '<span class="badge" style="font-size:14px;color:#fff;background:' + attColor + '">' + esc(att) + '</span>';
+  // 选择题
+  const qs = r.questions || [];
+  document.getElementById('p-questions').innerHTML = qs.length
+    ? qs.map((q, i) =>
+        '<div class="block"><div class="block-title">' + (i + 1) + '. ' + esc(q.q) + '</div>'
+        + (q.options || []).map((o, oi) =>
+            '<button class="rating-btn qopt" data-qi="' + i + '" data-oi="' + oi + '" style="display:block;width:100%;text-align:left;margin-bottom:6px" onclick="pickQ(this)">' + esc(o) + '</button>'
+          ).join('')
+        + '<div class="q-explain" style="display:none;margin-top:8px" id="qe-' + i + '"></div></div>'
+      ).join('')
+    : '<span class="mut">AI 未生成题目</span>';
+  document.getElementById('result-wrap').style.display = '';
+  document.getElementById('result-wrap').scrollIntoView({ behavior: 'smooth' });
+}
+
+function pickQ(btn){
+  const wrap = btn.parentElement;
+  wrap.querySelectorAll('.qopt').forEach(b => b.disabled = true);
+  btn.classList.add('on');
+}
+
+function gradeQs(){
+  const r = PASSAGE_RESULT || {};
+  const qs = r.questions || [];
+  let score = 0;
+  qs.forEach((q, i) => {
+    const chosen = document.querySelector('.qopt.on[data-qi="' + i + '"]');
+    const expl = document.getElementById('qe-' + i);
+    const chosenText = chosen ? chosen.textContent.trim() : '';
+    const correctLetter = (q.answer || '').trim().replace('.', '');
+    const correctText = (q.options || []).find(o => o.trim().startsWith(correctLetter + '.') || o.trim().startsWith(correctLetter + '、'));
+    const isRight = chosen && chosenText.startsWith(correctLetter + '.');
+    if(isRight) score++;
+    expl.style.display = '';
+    expl.className = 'q-explain ' + (isRight ? 'trans' : 'tips');
+    expl.style.marginTop = '8px';
+    expl.innerHTML = '<strong>' + (isRight ? '✓ 对' : '✗ 错（你选：' + esc(chosenText) + '）') + ' 正确答案 ' + esc(correctLetter) + '</strong><br>'
+      + esc(correctText || '') + '<br><span class="mut">' + esc(q.explain || '') + '</span>';
+  });
+  notice('得分：' + score + ' / ' + qs.length);
+}
+
+async function collectPhrase(btn){
+  const p = (PASSAGE_RESULT.phrases || [])[Number(btn.dataset.i)];
+  if(!p) return;
+  const d = await post('/api/phrases', { phrase: p.en, translation: p.zh || '', context: PASSAGE_TEXT.slice(0, 120) });
+  if(d.ok){ btn.textContent = '已收录 ✓'; btn.disabled = true; notice('已收录进短语本'); }
+  else notice('收录失败');
+}
+
+async function savePassage(){
+  if(PASSAGE_SAVED){ notice('已保存过了'); return; }
+  const d = await post('/api/passage/save', {
+    title: document.getElementById('p-title').value.trim(),
+    source: '文章精读',
+    original_text: PASSAGE_TEXT,
+    result: PASSAGE_RESULT
+  });
+  if(d.ok){ PASSAGE_SAVED = true; notice('已保存，可在下方历史记录查看'); }
+  else notice('保存失败：' + (d.error || ''));
+}
+
+async function delPassage(id){
+  if(!confirm('删除这篇精读记录？')) return;
+  await post('/api/passage/' + id + '/delete', {});
+  location.href = '/passage';
+}
+
+// 查看已保存记录：只读渲染
+{% if view %}
+(function(){
+  document.getElementById('input-card').style.display = 'none';
+  document.querySelector('#result-wrap .card:last-child').style.display = 'none';
+  PASSAGE_RESULT = {{ view.result_obj | tojson }};
+  PASSAGE_TEXT = {{ view.original_text | tojson }};
+  renderPassage(PASSAGE_RESULT);
+  const qs = PASSAGE_RESULT ? (PASSAGE_RESULT.questions || []) : [];
+  qs.forEach((q, i) => {
+    const expl = document.getElementById('qe-' + i);
+    if(expl){
+      const correctLetter = (q.answer || '').trim().replace('.', '');
+      const correctText = (q.options || []).find(o => o.trim().startsWith(correctLetter + '.') || o.trim().startsWith(correctLetter + '、'));
+      expl.style.display = '';
+      expl.className = 'q-explain trans';
+      expl.style.marginTop = '8px';
+      expl.innerHTML = '<strong>正确答案 ' + esc(correctLetter) + '</strong><br>' + esc(correctText || '')
+        + '<br><span class="mut">' + esc(q.explain || '') + '</span>';
+    }
+  });
+  document.querySelectorAll('.qopt').forEach(b => b.disabled = true);
+})();
+{% endif %}
+</script>
+{% endblock %}
