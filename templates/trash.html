@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}回收站 · Wynneeee's training{% endblock %}
+{% block content %}
+<h1>回收站</h1>
+<p class="mut">取消收录的句子和短语会出现在这里，<strong>7 天后自动清除</strong>。期间可以恢复。</p>
+
+<section class="card" style="margin-bottom:18px">
+  <h2>已取消收录的句子</h2>
+  <div id="trash-sentences"><p class="mut">加载中…</p></div>
+</section>
+
+<section class="card">
+  <h2>已取消收录的短语</h2>
+  <div id="trash-phrases"><p class="mut">加载中…</p></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadTrash() {
+  const r = await fetch("/api/trash");
+  const d = await r.json();
+  const ss = document.getElementById("trash-sentences");
+  const ps = document.getElementById("trash-phrases");
+  if (!d.sentences.length && !d.phrases.length) {
+    ss.innerHTML = '<p class="mut">回收站是空的。</p>';
+    ps.innerHTML = "";
+    return;
+  }
+  ss.innerHTML = d.sentences.length ? d.sentences.map(s => `
+    <div class="trash-item">
+      <div class="trash-main">
+        <div class="stem">${esc(s.stem)}</div>
+        <div class="mut small">删除于 ${esc(s.deleted_at)}</div>
+      </div>
+      <div class="trash-ops">
+        <button class="btn soft" onclick="restore('sentence', ${s.id})">恢复</button>
+        <button class="btn ghost danger" onclick="purge('sentence', ${s.id})">彻底删除</button>
+      </div>
+    </div>`).join("") : '<p class="mut">没有已删除的句子</p>';
+  ps.innerHTML = d.phrases.length ? d.phrases.map(p => `
+    <div class="trash-item">
+      <div class="trash-main">
+        <div class="stem">${esc(p.phrase)} <span class="mut">— ${esc(p.translation)}</span></div>
+        <div class="mut small">删除于 ${esc(p.deleted_at)}</div>
+      </div>
+      <div class="trash-ops">
+        <button class="btn soft" onclick="restore('phrase', ${p.id})">恢复</button>
+        <button class="btn ghost danger" onclick="purge('phrase', ${p.id})">彻底删除</button>
+      </div>
+    </div>`).join("") : '<p class="mut">没有已删除的短语</p>';
+}
+function esc(s) {
+  return (s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+async function restore(kind, id) {
+  const r = await fetch("/api/trash/restore", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({kind, id})});
+  const d = await r.json();
+  if (d.ok) loadTrash(); else alert(d.error || "恢复失败");
+}
+async function purge(kind, id) {
+  if (!confirm("彻底删除后无法恢复，确定吗？")) return;
+  const r = await fetch("/api/trash/purge", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({kind, id})});
+  const d = await r.json();
+  if (d.ok) loadTrash(); else alert(d.error || "删除失败");
+}
+loadTrash();
+</script>
+{% endblock %}

@@ -8,6 +8,7 @@
 """
 import json
 import re
+import time
 
 from openai import OpenAI
 
@@ -19,8 +20,33 @@ _client = None
 def _get_client():
     global _client
     if _client is None:
-        _client = OpenAI(api_key=config.DEEPSEEK_API_KEY, base_url=config.DEEPSEEK_BASE_URL)
+        _client = OpenAI(
+            api_key=config.DEEPSEEK_API_KEY,
+            base_url=config.DEEPSEEK_BASE_URL,
+            timeout=60.0,
+            max_retries=2,
+        )
     return _client
+
+
+def _chat(messages):
+    """带重试的 chat 调用：网络瞬时错误自动重试 2 次。"""
+    client = _get_client()
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = client.chat.completions.create(
+                model=config.DEEPSEEK_MODEL,
+                messages=messages,
+                response_format={"type": "json_object"},
+                temperature=0.3,
+            )
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    raise last_err
 
 
 # 考点别名 → 枚举标准名（AI 说法可能飘，这里统一收口；顺序敏感：先具体后泛化）
@@ -88,19 +114,13 @@ def analyze_with_ai(text: str, user_translation: str = "") -> dict:
     if user_translation:
         user_content += f"\n\n我的译文：{user_translation}\n请在分析之外，额外给出 critique 字段点评我的译文。"
     try:
-        resp = _get_client().chat.completions.create(
-            model=config.DEEPSEEK_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3,
-        )
-        content = resp.choices[0].message.content or ""
+        content = _chat([
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ])
         return _parse_result(content)
     except Exception as e:
-        return {"error": f"AI 调用失败：{e}"}
+        return {"error": f"AI 调用失败（已重试）：{e}"}
 
 
 def _parse_result(content: str) -> dict:
@@ -212,16 +232,11 @@ def review_critique(text: str, current_translation: str, previous_translation: s
     if full_translation:
         user += f"参考翻译：{full_translation}\n"
     try:
-        resp = _get_client().chat.completions.create(
-            model=config.DEEPSEEK_MODEL,
-            messages=[
-                {"role": "system", "content": REVIEW_CRITIQUE_PROMPT},
-                {"role": "user", "content": user},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3,
-        )
-        data = _parse_result(resp.choices[0].message.content or "")
+        content = _chat([
+            {"role": "system", "content": REVIEW_CRITIQUE_PROMPT},
+            {"role": "user", "content": user},
+        ])
+        data = _parse_result(content)
         if "error" in data:
             return data
         data["verdict"] = data.get("verdict") or ""
@@ -231,7 +246,7 @@ def review_critique(text: str, current_translation: str, previous_translation: s
         data["advanced"] = data.get("advanced") or []
         return data
     except Exception as e:
-        return {"error": f"AI 调用失败：{e}"}
+        return {"error": f"AI 调用失败（已重试）：{e}"}
 
 
 REVIEW_CRITIQUE_PROMPT = (
@@ -244,6 +259,52 @@ REVIEW_CRITIQUE_PROMPT = (
     '"advanced": [{"en": "高级表达", "zh": "意思", "usage": "在句子里怎么用/替换了哪个普通说法"}]}\n'
     "要求：problems 不超过 3 条、advanced 给出 1-3 个能把译文说得更高级的表达（替换口语化/直译说法）。"
 )
+
+
+# ---------------- 出题练习点评 ----------------
+
+QUIZ_CRITIQUE_PROMPT = (
+    "你是考研英语翻译批改老师。用户在翻译练习中写了一个答案，你要一针见血点评。\n"
+    "严格输出一个 JSON 对象，格式：\n"
+    '{"score": 0到100的整数, '
+    '"verdict": "一句话总评", '
+    '"problems": ["具体问题，指出对应位置和原因"], '
+    '"better": "更地道的完整参考答案"}\n'
+    "要求：problems 不超过 3 条；如果是中译英，注意检查语法、搭配、是否直译腔；"
+    "如果是英译中，注意检查是否漏译、错译、翻译腔。score 按考研翻译评分标准（准确、通顺、完整）打分。"
+)
+
+
+def quiz_critique(question: str, reference: str, user_answer: str, direction: str) -> dict:
+    """出题练习点评：direction 为 zh2en（中译英）或 en2zh（英译中）。"""
+    if config.MOCK_MODE:
+        return {
+            "score": 0,
+            "verdict": "（离线演示模式）",
+            "problems": ["配置 DEEPSEEK_API_KEY 后，AI 会一针见血点评你的作答"],
+            "better": reference,
+        }
+    user = (
+        f"练习类型：{'中译英' if direction == 'zh2en' else '英译中'}\n"
+        f"题目：{question}\n"
+        f"参考答案：{reference}\n"
+        f"我的作答：{user_answer}\n"
+    )
+    try:
+        content = _chat([
+            {"role": "system", "content": QUIZ_CRITIQUE_PROMPT},
+            {"role": "user", "content": user},
+        ])
+        data = _parse_result(content)
+        if "error" in data:
+            return data
+        data["score"] = int(data.get("score") or 0)
+        data["verdict"] = data.get("verdict") or ""
+        data["problems"] = data.get("problems") or []
+        data["better"] = data.get("better") or ""
+        return data
+    except Exception as e:
+        return {"error": f"AI 调用失败（已重试）：{e}"}
 
 
 # ---------------- 文章精读 ----------------
@@ -267,16 +328,10 @@ def analyze_passage(text: str) -> dict:
     if config.MOCK_MODE:
         return {"error": "（离线演示模式不支持文章精读）在 .env 配置 DEEPSEEK_API_KEY 后可用"}
     try:
-        resp = _get_client().chat.completions.create(
-            model=config.DEEPSEEK_MODEL,
-            messages=[
-                {"role": "system", "content": PASSAGE_SYSTEM_PROMPT},
-                {"role": "user", "content": f"请精读这篇文章并按要求输出：\n\n{text[:6000]}"},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3,
-        )
-        content = resp.choices[0].message.content or ""
+        content = _chat([
+            {"role": "system", "content": PASSAGE_SYSTEM_PROMPT},
+            {"role": "user", "content": f"请精读这篇文章并按要求输出：\n\n{text[:6000]}"},
+        ])
         data = _parse_result(content)
         if "error" in data:
             return data
@@ -289,4 +344,4 @@ def analyze_passage(text: str) -> dict:
         data["questions"] = data.get("questions") or []
         return data
     except Exception as e:
-        return {"error": f"AI 调用失败：{e}"}
+        return {"error": f"AI 调用失败（已重试）：{e}"}

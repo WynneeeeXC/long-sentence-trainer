@@ -83,9 +83,17 @@ def init_db():
         "difficulty":       "INTEGER DEFAULT 3",
         "user_translation": "TEXT",
         "critique":         "TEXT",
+        "deleted_at":       "TIMESTAMP",
     }.items():
         if col not in existing:
             c.execute(f"ALTER TABLE sentences ADD COLUMN {col} {ddl}")
+    # phrases 补 deleted_at（软删除 -> 回收站）
+    ph_cols = {r[1] for r in c.execute("PRAGMA table_info(phrases)").fetchall()}
+    if "deleted_at" not in ph_cols:
+        c.execute("ALTER TABLE phrases ADD COLUMN deleted_at TIMESTAMP")
+
+    # 回收站自动清理：删除超过 7 天的记录
+    _purge_trash(c)
 
     # 旧考点名迁移：倒装 -> 倒装句 等；旧版"非谓语"无法区分子类，保留原值
     rows = c.execute("SELECT id, exam_points FROM sentences WHERE exam_points IS NOT NULL").fetchall()
@@ -107,6 +115,16 @@ def init_db():
 
 def _j(obj):
     return json.dumps(obj, ensure_ascii=False) if obj else None
+
+
+def _purge_trash(c):
+    """物理删除回收站中超过 7 天的记录（启动时调用一次）。"""
+    c.execute(
+        "DELETE FROM sentences WHERE deleted_at IS NOT NULL "
+        "AND deleted_at < datetime('now','localtime','-7 days')")
+    c.execute(
+        "DELETE FROM phrases WHERE deleted_at IS NOT NULL "
+        "AND deleted_at < datetime('now','localtime','-7 days')")
 
 
 def insert_sentence(stem, source, structure=None, exam_points=None,
@@ -154,7 +172,7 @@ def list_sentences(q="", point=""):
     conn = get_conn()
     sql = """SELECT s.id, s.stem, s.source, s.exam_points, s.created_at,
                     (SELECT COUNT(*) FROM reviews r WHERE r.sentence_id = s.id) AS review_count
-             FROM sentences s WHERE 1=1"""
+             FROM sentences s WHERE s.deleted_at IS NULL"""
     args = []
     if q:
         sql += " AND s.stem LIKE ?"
@@ -177,7 +195,7 @@ def similar_sentences(sid, points, limit=5):
     ids = []
     for p in points:
         rows = conn.execute(
-            "SELECT id FROM sentences WHERE id != ? AND exam_points LIKE ? LIMIT 3",
+            "SELECT id FROM sentences WHERE id != ? AND deleted_at IS NULL AND exam_points LIKE ? LIMIT 3",
             (sid, f'%"{p}"%'),
         ).fetchall()
         for r in rows:
@@ -209,8 +227,27 @@ def update_note(sid, note):
 
 
 def delete_sentence(sid):
+    """软删除：进回收站（deleted_at 标记）。"""
     conn = get_conn()
+    conn.execute(
+        "UPDATE sentences SET deleted_at = datetime('now','localtime') WHERE id = ?", (sid,))
+    conn.commit()
+    conn.close()
+
+
+def hard_delete_sentence(sid):
+    """彻底删除（回收站内使用，连带复习记录/短语）。"""
+    conn = get_conn()
+    conn.execute("DELETE FROM phrases WHERE sentence_id = ?", (sid,))
+    conn.execute("DELETE FROM reviews WHERE sentence_id = ?", (sid,))
     conn.execute("DELETE FROM sentences WHERE id = ?", (sid,))
+    conn.commit()
+    conn.close()
+
+
+def restore_sentence(sid):
+    conn = get_conn()
+    conn.execute("UPDATE sentences SET deleted_at = NULL WHERE id = ?", (sid,))
     conn.commit()
     conn.close()
 
@@ -256,7 +293,8 @@ def next_review_sentence():
     r = conn.execute(
         """SELECT s.id, s.stem, s.source,
                   (SELECT COUNT(*) FROM reviews r WHERE r.sentence_id = s.id) AS review_count
-           FROM sentences s ORDER BY review_count ASC, RANDOM() LIMIT 1"""
+           FROM sentences s WHERE s.deleted_at IS NULL
+           ORDER BY review_count ASC, RANDOM() LIMIT 1"""
     ).fetchone()
     conn.close()
     return dict(r) if r else None
@@ -264,7 +302,8 @@ def next_review_sentence():
 
 def count_sentences():
     conn = get_conn()
-    n = conn.execute("SELECT COUNT(*) FROM sentences").fetchone()[0]
+    n = conn.execute(
+        "SELECT COUNT(*) FROM sentences WHERE deleted_at IS NULL").fetchone()[0]
     conn.close()
     return n
 
@@ -273,7 +312,8 @@ def count_never_reviewed():
     conn = get_conn()
     n = conn.execute(
         """SELECT COUNT(*) FROM sentences s
-           WHERE NOT EXISTS (SELECT 1 FROM reviews r WHERE r.sentence_id = s.id)"""
+           WHERE s.deleted_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.sentence_id = s.id)"""
     ).fetchone()[0]
     conn.close()
     return n
@@ -281,12 +321,14 @@ def count_never_reviewed():
 
 def stats():
     conn = get_conn()
-    total = conn.execute("SELECT COUNT(*) FROM sentences").fetchone()[0]
+    total = conn.execute("SELECT COUNT(*) FROM sentences WHERE deleted_at IS NULL").fetchone()[0]
     total_reviews = conn.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
     reviewed = conn.execute("SELECT COUNT(DISTINCT sentence_id) FROM reviews").fetchone()[0]
 
     point_counts = {p: 0 for p in config.EXAM_POINTS}
-    for r in conn.execute("SELECT exam_points FROM sentences").fetchall():
+    for r in conn.execute(
+        "SELECT exam_points FROM sentences WHERE deleted_at IS NULL"
+    ).fetchall():
         if not r["exam_points"]:
             continue
         for p in json.loads(r["exam_points"]):
@@ -313,8 +355,8 @@ def stats():
     weak_points = [{"point": p, "misses": c} for p, c in weak.items()]
     weak_points.sort(key=lambda x: -x["misses"])
 
-    phrase_total = conn.execute("SELECT COUNT(*) FROM phrases").fetchone()[0]
-    phrase_mastered = conn.execute("SELECT COUNT(*) FROM phrases WHERE mastered = 1").fetchone()[0]
+    phrase_total = conn.execute("SELECT COUNT(*) FROM phrases WHERE deleted_at IS NULL").fetchone()[0]
+    phrase_mastered = conn.execute("SELECT COUNT(*) FROM phrases WHERE deleted_at IS NULL AND mastered = 1").fetchone()[0]
     conn.close()
     return {
         "total_sentences": total,
@@ -334,7 +376,7 @@ def export_rows():
         dict(r)
         for r in conn.execute(
             "SELECT id, stem, source, exam_points, full_translation, created_at "
-            "FROM sentences ORDER BY id"
+            "FROM sentences WHERE deleted_at IS NULL ORDER BY id"
         ).fetchall()
     ]
     conn.close()
@@ -358,17 +400,32 @@ def list_phrases(include_mastered=True):
     conn = get_conn()
     if include_mastered:
         rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM phrases ORDER BY mastered ASC, id DESC").fetchall()]
+            "SELECT * FROM phrases WHERE deleted_at IS NULL ORDER BY mastered ASC, id DESC").fetchall()]
     else:
         rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM phrases WHERE mastered = 0 ORDER BY id DESC").fetchall()]
+            "SELECT * FROM phrases WHERE deleted_at IS NULL AND mastered = 0 ORDER BY id DESC").fetchall()]
     conn.close()
     return rows
 
 
 def delete_phrase(pid):
+    """软删除：进回收站。"""
+    conn = get_conn()
+    conn.execute("UPDATE phrases SET deleted_at = datetime('now','localtime') WHERE id = ?", (pid,))
+    conn.commit()
+    conn.close()
+
+
+def hard_delete_phrase(pid):
     conn = get_conn()
     conn.execute("DELETE FROM phrases WHERE id = ?", (pid,))
+    conn.commit()
+    conn.close()
+
+
+def restore_phrase(pid):
+    conn = get_conn()
+    conn.execute("UPDATE phrases SET deleted_at = NULL WHERE id = ?", (pid,))
     conn.commit()
     conn.close()
 
@@ -383,7 +440,7 @@ def set_phrase_mastered(pid, flag):
 def phrases_by_sentence(sid):
     conn = get_conn()
     rows = [dict(r) for r in conn.execute(
-        "SELECT * FROM phrases WHERE sentence_id = ? ORDER BY id", (sid,)).fetchall()]
+        "SELECT * FROM phrases WHERE sentence_id = ? AND deleted_at IS NULL ORDER BY id", (sid,)).fetchall()]
     conn.close()
     return rows
 
@@ -392,15 +449,30 @@ def quiz_phrases(n=5):
     """随机抽 n 个短语（优先未掌握的），用于匹配出题。"""
     conn = get_conn()
     rows = [dict(r) for r in conn.execute(
-        """SELECT * FROM phrases WHERE mastered = 0 ORDER BY RANDOM() LIMIT ?""", (n,)
+        """SELECT * FROM phrases WHERE deleted_at IS NULL AND mastered = 0 ORDER BY RANDOM() LIMIT ?""", (n,)
     ).fetchall()]
     if len(rows) < n:
         extra = [dict(r) for r in conn.execute(
-            """SELECT * FROM phrases WHERE mastered = 1 ORDER BY RANDOM() LIMIT ?""",
+            """SELECT * FROM phrases WHERE deleted_at IS NULL AND mastered = 1 ORDER BY RANDOM() LIMIT ?""",
             (n - len(rows),)).fetchall()]
         rows += extra
     conn.close()
     return rows
+
+
+# ---------------- 回收站 ----------------
+
+def list_trash():
+    """回收站：已软删除的句子和短语（7 天内）。"""
+    conn = get_conn()
+    sentences = [dict(r) for r in conn.execute(
+        "SELECT id, stem, deleted_at FROM sentences WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+    ).fetchall()]
+    phrases = [dict(r) for r in conn.execute(
+        "SELECT id, phrase, translation, deleted_at FROM phrases WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+    ).fetchall()]
+    conn.close()
+    return {"sentences": sentences, "phrases": phrases}
 
 
 # ---------------- 文章精读 ----------------

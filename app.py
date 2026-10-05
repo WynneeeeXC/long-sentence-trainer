@@ -142,6 +142,47 @@ def api_delete(sid):
     if not db.get_sentence(sid):
         return jsonify({"ok": False, "error": "句子不存在"})
     db.delete_sentence(sid)
+    return jsonify({"ok": True, "message": "已移入回收站（7 天后自动清除）"})
+
+
+# ---------------- 回收站 ----------------
+
+@app.route("/trash")
+def trash_page():
+    return render_template("trash.html")
+
+
+@app.get("/api/trash")
+def api_trash():
+    return jsonify(db.list_trash())
+
+
+@app.post("/api/trash/restore")
+def api_trash_restore():
+    data = request.get_json(silent=True) or {}
+    kind = data.get("kind")
+    rid = data.get("id")
+    if kind == "sentence":
+        db.restore_sentence(rid)
+    elif kind == "phrase":
+        db.restore_phrase(rid)
+    else:
+        return jsonify({"ok": False, "error": "无效类型"})
+    return jsonify({"ok": True})
+
+
+@app.post("/api/trash/purge")
+def api_trash_purge():
+    """彻底删除（不可恢复）。"""
+    data = request.get_json(silent=True) or {}
+    kind = data.get("kind")
+    rid = data.get("id")
+    if kind == "sentence":
+        db.hard_delete_sentence(rid)
+    elif kind == "phrase":
+        db.hard_delete_phrase(rid)
+    else:
+        return jsonify({"ok": False, "error": "无效类型"})
     return jsonify({"ok": True})
 
 
@@ -299,6 +340,39 @@ def api_quiz():
             "context": p["context"],
         })
     return jsonify({"ok": True, "questions": questions})
+
+
+@app.get("/api/quiz/sentence")
+def api_quiz_sentence():
+    """考研英译中（句子级翻译题）：随机抽 n 句有完整翻译的句子。"""
+    n = request.args.get("n", default=5, type=int)
+    conn = db.get_conn()
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, stem, full_translation FROM sentences "
+        "WHERE deleted_at IS NULL AND full_translation IS NOT NULL AND full_translation != ''"
+    ).fetchall()]
+    conn.close()
+    if not rows:
+        return jsonify({"ok": False, "message": "句子库里还没有带完整翻译的句子，先去分析几句吧"})
+    if len(rows) > n:
+        rows = random.sample(rows, n)
+    return jsonify({"ok": True, "questions": [
+        {"id": r["id"], "en": r["stem"], "zh": r["full_translation"]} for r in rows
+    ]})
+
+
+@app.post("/api/quiz/grade")
+def api_quiz_grade():
+    """AI 点评用户作答（中译英造句 / 英译中翻译）。"""
+    data = request.get_json(silent=True) or {}
+    question = (data.get("question") or "").strip()
+    reference = (data.get("reference") or "").strip()
+    user_answer = (data.get("user_answer") or "").strip()
+    direction = data.get("direction") or "zh2en"
+    if not user_answer:
+        return jsonify({"ok": False, "error": "请先写你的答案"})
+    critique = ai_service.quiz_critique(question, reference, user_answer, direction)
+    return jsonify({"ok": True, "critique": critique})
 
 
 # ---------------- 快捷收录（手机友好） ----------------

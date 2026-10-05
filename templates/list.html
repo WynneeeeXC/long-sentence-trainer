@@ -25,8 +25,8 @@
 </div>
 
 {% for r in rows %}
-<a class="sentence-link" href="/detail/{{ r.id }}">
-  <div class="card">
+<div class="sentence-link">
+  <a href="/detail/{{ r.id }}" class="card" style="display:block">
     <div class="sentence-stem">{{ r.stem }}</div>
     <div style="margin-top:10px">
       {% for p in r.points_list %}<span class="badge">{{ p }}</span>{% endfor %}
@@ -36,9 +36,21 @@
       {{ r.source or '未标注' }} · {{ r.created_at }} · 复习 {{ r.review_count }} 次
       {% if r.review_count == 0 %}<span class="badge warn">待复习</span>{% endif %}
     </div>
-  </div>
-</a>
+  </a>
+  <button class="btn ghost danger" style="margin-top:8px" onclick="uncollect({{ r.id }})">取消收录</button>
+</div>
 {% else %}
 <div class="empty">还没有句子，去 <a href="/">分析</a> 第一句吧</div>
 {% endfor %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function uncollect(sid) {
+  if (!confirm("确定取消收录这句吗？会移入回收站，7 天内可恢复。")) return;
+  const r = await fetch(`/api/sentence/${sid}/delete`, {method:"POST"});
+  const d = await r.json();
+  if (d.ok) { location.reload(); } else { alert(d.error || "操作失败"); }
+}
+</script>
 {% endblock %}

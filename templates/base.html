@@ -22,11 +22,13 @@
       <a href="/quiz" class="{{ 'active' if request.path == '/quiz' else '' }}">出题</a>
       <a href="/passage" class="{{ 'active' if request.path == '/passage' else '' }}">文章精读</a>
       <a href="/stats" class="{{ 'active' if request.path == '/stats' else '' }}">统计</a>
+      <a href="/trash" class="{{ 'active' if request.path == '/trash' else '' }}">回收站</a>
     </div>
   </div>
 </nav>
 <main class="wrap">
 {% block content %}{% endblock %}
 </main>
+{% block scripts %}{% endblock %}
 </body>
 </html>

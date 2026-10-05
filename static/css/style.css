@@ -89,6 +89,12 @@ table.seg tr:last-child td{border-bottom:none}
 .empty{text-align:center;color:var(--mut);padding:40px 0}
 .sentence-link{text-decoration:none;color:inherit;display:block}
 .sentence-link:hover .card{border-color:var(--p2)}
+.trash-item{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line)}
+.trash-item:last-child{border-bottom:none}
+.trash-main{min-width:0;flex:1}
+.trash-ops{flex:0 0 auto;display:flex;gap:8px}
+.trash-ops .btn{padding:7px 12px;font-size:13px}
+.small{font-size:12px}
 .notice{position:fixed;left:50%;top:18px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 20px;border-radius:12px;font-size:13px;z-index:99;opacity:0;transition:.25s;pointer-events:none;max-width:80vw}
 .notice.show{opacity:1}
 .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px}

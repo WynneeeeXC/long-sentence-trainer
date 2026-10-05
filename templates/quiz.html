@@ -1,20 +1,21 @@
 {% extends "base.html" %}
 {% block title %}出题 · Wynneeee's training{% endblock %}
 {% block content %}
-<h1>短语练习</h1>
-<p class="sub">三种题型：英选中 / 英译中听写 / 中译英造句——混合着练，练的是真正会用</p>
+<h1>练习出题</h1>
+<p class="sub">短语级：英选中 / 英译中听写 / 中译英造句；句子级：英译中（考研翻译题）。手写题提交后 AI 一针见血点评。</p>
 
 <div class="tabs">
   <div class="tab on" data-m="mix">混合</div>
   <div class="tab" data-m="match">英选中文</div>
   <div class="tab" data-m="dictation">英译中听写</div>
   <div class="tab" data-m="recall">中译英造句</div>
+  <div class="tab" data-m="sentence">英译中（句子）</div>
 </div>
 
 <div class="card" id="quiz-start">
-  <p class="mut">从短语本随机抽 5 个短语。</p>
+  <p class="mut">短语题从短语本随机抽 5 个；句子题从句子库随机抽 5 句（需已有 AI 整句翻译）。</p>
   <button class="btn primary" onclick="startQuiz()">开始出题</button>
-  <span id="quiz-empty" style="display:none" class="mut">短语本还空着，先去 <a href="/">分析句子</a> 收录几个短语。</span>
+  <span id="quiz-empty" style="display:none" class="mut">题库还空着，先去 <a href="/">分析句子</a> 收录吧。</span>
 </div>
 
 <div id="quiz-body" style="display:none">
@@ -53,11 +54,18 @@ document.querySelectorAll('.tab').forEach(t => {
 function esc(s){ const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 
 async function startQuiz(){
-  const d = await (await fetch('/api/quiz?n=5')).json();
-  if(!d.ok){
-    document.getElementById('quiz-empty').style.display = '';
+  if(mode === 'sentence'){
+    const d = await (await fetch('/api/quiz/sentence?n=5')).json();
+    if(!d.ok){ document.getElementById('quiz-empty').style.display = ''; return; }
+    questions = d.questions; idx = 0; score = 0; answered = [];
+    document.getElementById('quiz-start').style.display = 'none';
+    document.getElementById('quiz-body').style.display = '';
+    document.getElementById('quiz-result').style.display = 'none';
+    showQ();
     return;
   }
+  const d = await (await fetch('/api/quiz?n=5')).json();
+  if(!d.ok){ document.getElementById('quiz-empty').style.display = ''; return; }
   questions = d.questions; idx = 0; score = 0; answered = [];
   document.getElementById('quiz-start').style.display = 'none';
   document.getElementById('quiz-body').style.display = '';
@@ -68,16 +76,19 @@ async function startQuiz(){
 function pickType(){
   if(mode !== 'mix') return mode;
   const roll = Math.random();
-  if(roll < 0.45) return 'match';
-  if(roll < 0.75) return 'dictation';
+  if(roll < 0.4) return 'match';
+  if(roll < 0.7) return 'dictation';
   return 'recall';
+}
+
+function typeName(t){
+  return ({match:'英选中文', dictation:'英译中听写', recall:'中译英造句', sentence:'英译中（句子）'})[t];
 }
 
 function showQ(){
   const q = questions[idx];
-  qtype = pickType();
-  document.getElementById('quiz-progress').textContent = '第 ' + (idx + 1) + ' / ' + questions.length + ' 题 · 题型：'
-    + ({match:'英选中文', dictation:'英译中听写', recall:'中译英造句'})[qtype];
+  qtype = mode === 'sentence' ? 'sentence' : pickType();
+  document.getElementById('quiz-progress').textContent = '第 ' + (idx + 1) + ' / ' + questions.length + ' 题 · 题型：' + typeName(qtype);
   const qb = document.getElementById('quiz-q');
   const inputBox = document.getElementById('quiz-input');
   const fb = document.getElementById('quiz-feedback');
@@ -105,9 +116,13 @@ function showQ(){
       + (q.context ? '<div class="mut" style="margin-top:8px">出处：' + esc(q.context) + '</div>' : '');
     inputBox.innerHTML = '<textarea id="write-ans" placeholder="写出中文翻译…" style="min-height:64px"></textarea>';
     document.getElementById('btn-ok').style.display = '';
-  } else { // recall 中译英造句
+  } else if(qtype === 'recall'){
     qb.innerHTML = '<div class="block-title">造句：根据中文意思，写出对应的英文表达（最好再造个短句）</div><div class="sentence-stem">' + esc(q.zh) + '</div>';
     inputBox.innerHTML = '<textarea id="write-ans" placeholder="英文表达 + 一个例句…" style="min-height:64px"></textarea>';
+    document.getElementById('btn-ok').style.display = '';
+  } else { // sentence 英译中（句子级，考研翻译题）
+    qb.innerHTML = '<div class="block-title">翻译：把下面这个句子翻译成通顺的中文（考研翻译题）</div><div class="sentence-stem">' + esc(q.en) + '</div>';
+    inputBox.innerHTML = '<textarea id="write-ans" placeholder="写出你的中文翻译…" style="min-height:96px"></textarea>';
     document.getElementById('btn-ok').style.display = '';
   }
 }
@@ -121,28 +136,61 @@ function pickMatch(opt, q, btn){
     if(b.textContent === q.answer) b.classList.add('on');
     else if(b === btn && !ok) b.style.opacity = .5;
   });
-  showFeedback(q, ok, opt);
+  showFeedback(q, ok, opt, null);
   document.getElementById('btn-next-q').style.display = '';
 }
 
-function confirmAnswer(){
+async function confirmAnswer(){
   const q = questions[idx];
   const my = document.getElementById('write-ans').value.trim();
   if(!my){ alert('先写点什么再确认'); return; }
-  const target = qtype === 'dictation' ? q.zh : q.en;
-  const ok = target && my.toLowerCase().includes(target.toLowerCase());
+  const btnOk = document.getElementById('btn-ok');
+  btnOk.disabled = true;
+  btnOk.textContent = 'AI 点评中…';
+  // 手写题交给 AI 点评（dictation/recall/sentence）
+  const grade = await (await fetch('/api/quiz/grade', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      direction: qtype === 'recall' ? 'zh2en' : 'en2zh',
+      question: qtype === 'recall' ? q.zh : q.en,
+      reference: qtype === 'recall' ? (q.en || '') : (q.zh || ''),
+      user_answer: my,
+    })
+  })).json();
+  const c = grade.ok ? grade.critique : null;
+  const ok = c && (c.score || 0) >= 60;
   if(ok) score++;
-  answered.push({ q, qtype, answer: my, ok });
-  showFeedback(q, ok, my, target);
+  answered.push({ q, qtype, answer: my, ok, score: c ? c.score : 0 });
+  showFeedback(q, ok, my, c);
   document.getElementById('btn-next-q').style.display = '';
-  document.getElementById('btn-ok').style.display = 'none';
+  btnOk.style.display = 'none';
+  btnOk.disabled = false;
+  btnOk.textContent = '确认';
 }
 
-function showFeedback(q, ok, my){
+function showFeedback(q, ok, my, c){
   const fb = document.getElementById('quiz-feedback');
-  const correct = qtype === 'match' ? q.zh : (qtype === 'dictation' ? ('标准：' + q.zh) : ('标准：' + q.en));
-  fb.innerHTML = '<div class="' + (ok ? 'trans' : 'tips') + '">'
-    + '<strong>' + (ok ? '✓ 对了' : '✗ 对照一下') + '</strong> 你答：' + esc(my || '') + '<br>' + esc(correct) + '</div>';
+  if(qtype === 'match'){
+    fb.innerHTML = '<div class="' + (ok ? 'trans' : 'tips') + '"><strong>' + (ok ? '✓ 对了' : '✗ 对照一下') + '</strong> 你答：' + esc(my || '') + '<br>标准：' + esc(q.answer || '') + '</div>';
+    return;
+  }
+  if(!c){
+    fb.innerHTML = '<div class="tips"><strong>对照一下</strong> 你答：' + esc(my || '')
+      + '<br>标准：' + esc(qtype === 'recall' ? (q.en || '') : (q.zh || '')) + '</div>';
+    return;
+  }
+  let h = '<div class="' + (ok ? 'trans' : 'tips') + '">';
+  h += '<strong>' + (ok ? '✓ 通过（AI 评分 ' + (c.score || 0) + '）' : '✗ 需改进（AI 评分 ' + (c.score || 0) + '）') + '</strong>';
+  h += '<div style="margin-top:6px"><b>总评：</b>' + esc(c.verdict || '') + '</div>';
+  if(c.problems && c.problems.length){
+    h += '<div style="margin-top:6px"><b>问题：</b></div><ul style="margin:4px 0 0 18px">'
+      + c.problems.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>';
+  }
+  if(c.better){
+    h += '<div style="margin-top:6px"><b>更地道的参考答案：</b><br>' + esc(c.better) + '</div>';
+  }
+  h += '<div class="mut" style="margin-top:6px">你答：' + esc(my || '') + '</div></div>';
+  fb.innerHTML = h;
 }
 
 function nextQ(){
@@ -158,9 +206,11 @@ function showResult(){
   document.getElementById('result-detail').innerHTML =
     '<div style="font-size:22px;font-weight:700;color:var(--p1)">得分 ' + score + ' / ' + questions.length + '</div>'
     + answered.map(a => {
-      const t = ({match:'英选中', dictation:'听写', recall:'造句'})[a.qtype];
-      return '<div class="block"><div>' + t + ' · <strong>' + esc(a.q.en) + '</strong></div>'
-        + '<div class="mut">你答：' + esc(a.answer) + (a.ok ? ' ✓' : ' ✗ 正确：' + esc(a.qtype === 'recall' ? a.q.en : a.q.zh)) + '</div></div>';
+      const t = typeName(a.qtype);
+      const en = a.qtype === 'recall' ? (a.q.zh || '') : (a.q.en || '');
+      const ref = a.qtype === 'recall' ? (a.q.en || '') : (a.q.zh || '');
+      return '<div class="block"><div>' + t + ' · <strong>' + esc(en) + '</strong></div>'
+        + '<div class="mut">你答：' + esc(a.answer) + (a.ok ? ' ✓' : ' ✗ 参考：' + esc(ref)) + '</div></div>';
     }).join('');
 }
 </script>
